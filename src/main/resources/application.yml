@@ -1,0 +1,79 @@
+# Configuración de la aplicación Spring Boot con Keycloak
+
+server:
+  port: 8081  # Puerto diferente al de Keycloak (que usa 8080)
+
+spring:
+  application:
+    name: keycloak-spring-demo
+
+  # Configuración de OAuth2 Client (para login)
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            # ID del client que crearás en Keycloak
+            client-id: spring-boot-client
+            # Secret del client (confidential client)
+            client-secret: tu-client-secret-aqui
+            # Tipo de autorización
+            authorization-grant-type: authorization_code
+            # A dónde redirigir después del login
+            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
+            # Scopes que solicitamos
+            scope:
+              - openid
+              - profile
+              - email
+        provider:
+          keycloak:
+            # URL base de tu Keycloak
+            issuer-uri: http://localhost:8080/realms/mi-realm
+            # Endpoint de autorización
+            authorization-uri: http://localhost:8080/realms/mi-realm/protocol/openid-connect/auth
+            # Endpoint para obtener tokens
+            token-uri: http://localhost:8080/realms/mi-realm/protocol/openid-connect/token
+            # Endpoint de información del usuario
+            user-info-uri: http://localhost:8080/realms/mi-realm/protocol/openid-connect/userinfo
+            # Endpoint para obtener la configuración JWKS (claves públicas)
+            jwk-set-uri: http://localhost:8080/realms/mi-realm/protocol/openid-connect/certs
+            # Campo que contiene el nombre de usuario
+            user-name-attribute: preferred_username
+
+      # Configuración de Resource Server (para validar tokens)
+      resourceserver:
+        jwt:
+          # URL para obtener las claves públicas que validan los JWT
+          jwk-set-uri: http://localhost:8080/realms/mi-realm/protocol/openid-connect/certs
+          # Issuer esperado en los tokens
+          issuer-uri: http://localhost:8080/realms/mi-realm
+
+# Configuración de logging para ver qué está pasando
+logging:
+  level:
+    org.springframework.security: DEBUG
+    org.springframework.security.oauth2: DEBUG
+
+---
+# Perfil de desarrollo local
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+logging:
+  level:
+    com.example.keycloak: DEBUG
+
+---
+# Perfil de producción (ejemplo)
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+logging:
+  level:
+    org.springframework.security: INFO
+    com.example.keycloak: INFO
