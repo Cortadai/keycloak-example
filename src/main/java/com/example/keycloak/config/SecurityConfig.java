@@ -19,10 +19,22 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Configuración de seguridad para la aplicación.
+ * Configuración de seguridad para API Resource Server.
  *
- * Esta clase configura cómo Spring Security debe proteger los endpoints
- * y cómo debe validar los tokens JWT que vienen de Keycloak.
+ * Esta configuración implementa una API REST STATELESS que valida tokens JWT de Keycloak.
+ * NO gestiona flujos de autenticación (oauth2Login), solo VALIDA tokens recibidos.
+ *
+ * Características:
+ * - STATELESS: Sin sesiones HTTP, cada request debe incluir el token JWT
+ * - Resource Server: Valida tokens JWT contra las claves públicas de Keycloak
+ * - Extracción de roles: Convierte roles de Keycloak en authorities de Spring Security
+ * - CSRF deshabilitado: API REST sin formularios HTML
+ *
+ * Flujo de uso:
+ * 1. Cliente obtiene token de Keycloak (Client Credentials o Authorization Code)
+ * 2. Cliente envía request con header: Authorization: Bearer {token}
+ * 3. Spring Security valida el token y extrae roles
+ * 4. Los endpoints verifican roles con @PreAuthorize
  *
  * @Configuration - Indica que esta clase contiene configuración de Spring
  * @EnableWebSecurity - Habilita la seguridad web de Spring Security
@@ -34,9 +46,15 @@ import java.util.stream.Stream;
 public class SecurityConfig {
 
     /**
-     * Configuración principal de seguridad.
+     * Configuración principal de seguridad para API Resource Server.
      *
-     * SecurityFilterChain define las reglas de seguridad para las peticiones HTTP.
+     * Define las reglas de autorización y validación de tokens JWT.
+     *
+     * Reglas de autorización:
+     * - /public/** : Acceso público sin token
+     * - /api/user/** : Requiere token JWT con rol USER
+     * - /api/admin/** : Requiere token JWT con rol ADMIN
+     * - Todo lo demás: Requiere token JWT válido
      *
      * @param http El objeto HttpSecurity para configurar la seguridad
      * @return La cadena de filtros de seguridad configurada
@@ -61,11 +79,6 @@ public class SecurityConfig {
                 .anyRequest().authenticated()
             )
 
-            // Configuración de OAuth2 Login (para aplicaciones web con UI)
-            .oauth2Login(oauth2 -> oauth2
-                .defaultSuccessUrl("/api/user/me", true)
-            )
-
             // Configuración de Resource Server (para validar tokens JWT)
             .oauth2ResourceServer(oauth2 -> oauth2
                 .jwt(jwt -> jwt
@@ -75,13 +88,13 @@ public class SecurityConfig {
             )
 
             // Configuración de sesiones
-            // STATELESS = No crear sesiones HTTP (usar solo tokens)
+            // STATELESS = No crear sesiones HTTP (cada request debe incluir el token)
             .sessionManagement(session -> session
                 .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             )
 
             // Deshabilitar CSRF para APIs REST
-            // IMPORTANTE: Solo si tu app es una API REST sin formularios HTML
+            // CSRF no es necesario en APIs STATELESS que usan tokens JWT
             .csrf(csrf -> csrf.disable());
 
         return http.build();
