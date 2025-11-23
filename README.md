@@ -1,6 +1,6 @@
 # API Resource Server - Machine to Machine (M2M)
 
-> **Rama:** `oauth2-authorization-code`
+> **Rama:** `oauth2-resource-server`
 > **Propósito:** API REST STATELESS que valida tokens JWT de Keycloak para comunicación machine-to-machine
 
 ---
@@ -361,7 +361,8 @@ issuer-uri: http://localhost:9090/realms/mi-realm
 ## 🔗 Otras Ramas
 
 - **main** - Configuración base (por definir)
-- **oauth2-bff** - Patrón BFF para SPAs con cookies HttpOnly
+- **oauth2-resource-server** - API Resource Server STATELESS para M2M (esta rama)
+- **oauth2-bff** - Patrón BFF para SPAs con cookies HttpOnly y Authorization Code Flow
 
 ---
 
