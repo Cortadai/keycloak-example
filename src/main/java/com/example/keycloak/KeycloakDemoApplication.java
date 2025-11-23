@@ -1,5 +1,7 @@
 package com.example.keycloak;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
@@ -14,6 +16,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @SpringBootApplication
 public class KeycloakDemoApplication {
 
+    private static final Logger log = LoggerFactory.getLogger(KeycloakDemoApplication.class);
+
     /**
      * Punto de entrada de la aplicación.
      *
@@ -21,9 +25,9 @@ public class KeycloakDemoApplication {
      */
     public static void main(String[] args) {
         SpringApplication.run(KeycloakDemoApplication.class, args);
-        System.out.println("================================");
-        System.out.println("Aplicación iniciada correctamente");
-        System.out.println("URL: http://localhost:8081");
-        System.out.println("================================");
+        log.info("================================");
+        log.info("Aplicación iniciada correctamente");
+        log.info("URL: http://localhost:8081");
+        log.info("================================");
     }
 }

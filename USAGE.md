@@ -341,7 +341,22 @@ Para funcionalidades más avanzadas:
 git checkout oauth2-resource-server
 ```
 
-### Rama `oauth2-bff`
+### Rama `oauth2-spa-pkce`
+
+Qué añade:
+- Authorization Code Flow + PKCE (sin Client Secret)
+- Frontend Angular completo integrado con angular-oauth2-oidc
+- Tokens JWT gestionados en memoria (sin localStorage)
+- Logout automático cuando expira el token
+
+Cuándo usarla:
+- Proyectos donde la simplicidad de despliegue es importante (frontend estático + API)
+
+```bash
+git checkout oauth2-spa-pkce
+```
+
+### Rama `oauth2-bff-cookies`
 
 **Qué añade:**
 - Authorization Code Flow
@@ -353,5 +368,5 @@ git checkout oauth2-resource-server
 - SPAs modernas (React, Angular)
 
 ```bash
-git checkout oauth2-bff
+git checkout oauth2-bff-cookies
 ```

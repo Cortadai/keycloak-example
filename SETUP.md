@@ -269,8 +269,22 @@ Una vez que domines esta configuración básica, continúa con:
 ```bash
 git checkout oauth2-resource-server
 ```
+### Rama `oauth2-spa-pkce`
 
-### Rama `oauth2-bff`
+Qué añade:
+- Authorization Code Flow + PKCE (sin Client Secret)
+- Frontend Angular completo integrado con angular-oauth2-oidc
+- Tokens JWT gestionados en memoria (sin localStorage)
+- Logout automático cuando expira el token
+
+Cuándo usarla:
+- Proyectos donde la simplicidad de despliegue es importante (frontend estático + API)
+
+```bash
+git checkout oauth2-spa-pkce
+```
+
+### Rama `oauth2-bff-cookies`
 
 **Qué añade:**
 - Authorization Code Flow completo
@@ -284,7 +298,7 @@ git checkout oauth2-resource-server
 - Máxima seguridad para frontend
 
 ```bash
-git checkout oauth2-bff
+git checkout oauth2-bff-cookies
 ```
 
 ---
