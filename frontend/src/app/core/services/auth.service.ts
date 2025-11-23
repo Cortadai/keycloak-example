@@ -1,7 +1,9 @@
 import { Injectable, signal } from '@angular/core';
 import { Router } from '@angular/router';
+import { HttpClient } from '@angular/common/http';
 import { OAuthService, AuthConfig } from 'angular-oauth2-oidc';
-import { BehaviorSubject, filter } from 'rxjs';
+import { BehaviorSubject, filter, Observable, of } from 'rxjs';
+import { User } from '../models/user.model';
 
 /**
  * Servicio de autenticación para SPA con Authorization Code + PKCE.
@@ -48,9 +50,12 @@ export class AuthService {
   private authStatusSubject = new BehaviorSubject<boolean>(false);
   public authStatus$ = this.authStatusSubject.asObservable();
 
+  private readonly API_URL = 'http://localhost:8081/api';
+
   constructor(
     private oauthService: OAuthService,
-    private router: Router
+    private router: Router,
+    private http: HttpClient
   ) {
     this.configureOAuth();
     this.setupAuthFlow();
@@ -70,7 +75,7 @@ export class AuthService {
       issuer: 'http://localhost:9090/realms/mi-realm',
 
       // Client ID (debe ser público en Keycloak)
-      clientId: 'spring-boot-client',
+      clientId: 'spring-boot-angular',
 
       // URL de redirección después del login
       redirectUri: window.location.origin,
@@ -81,9 +86,6 @@ export class AuthService {
       // Scopes solicitados
       scope: 'openid profile email',
 
-      // CRÍTICO: Habilitar PKCE para clientes públicos
-      usePkce: true,
-
       // Mostrar logs en desarrollo
       showDebugInformation: true,
 
@@ -92,6 +94,10 @@ export class AuthService {
 
       // Refresh token automático
       sessionChecksEnabled: false,
+
+      // PKCE se habilita automáticamente para clientes públicos
+      // (cuando no hay requireHttps o oidc = true)
+      oidc: true,
     };
 
     this.oauthService.configure(authConfig);
@@ -148,11 +154,17 @@ export class AuthService {
    * 1. Revoca los tokens en Keycloak (opcional)
    * 2. Limpia los tokens del localStorage
    * 3. Redirige al usuario a la página de login
+   *
+   * @returns Observable que completa cuando se finaliza el logout
    */
-  logout(): void {
-    this.oauthService.logOut();
-    this.updateAuthState(false);
-    this.router.navigate(['/login']);
+  logout(): Observable<void> {
+    return new Observable(observer => {
+      this.oauthService.logOut();
+      this.updateAuthState(false);
+      this.router.navigate(['/login']);
+      observer.next();
+      observer.complete();
+    });
   }
 
   /**
@@ -241,5 +253,17 @@ export class AuthService {
    */
   get isAuthenticatedValue(): boolean {
     return this.oauthService.hasValidAccessToken();
+  }
+
+  /**
+   * Obtiene el perfil completo del usuario desde el backend.
+   *
+   * Este método hace una petición HTTP al endpoint /api/user/me
+   * con el token JWT en el header Authorization.
+   *
+   * @returns Observable con los datos del usuario
+   */
+  getUserProfile(): Observable<User> {
+    return this.http.get<User>(`${this.API_URL}/user/me`);
   }
 }

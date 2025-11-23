@@ -95,10 +95,10 @@ import { User } from '../../core/models/user.model';
           <div class="security-info">
             <h3>🔒 Información de Seguridad</h3>
             <ul>
-              <li>Tu sesión está protegida con cookies HttpOnly</li>
-              <li>El token JWT nunca es accesible desde JavaScript</li>
-              <li>Protección CSRF con SameSite=Strict</li>
-              <li>Autenticación gestionada por Keycloak</li>
+              <li>Autenticación con Authorization Code + PKCE</li>
+              <li>Token JWT almacenado en localStorage</li>
+              <li>PKCE protege contra interceptación del authorization code</li>
+              <li>Autenticación gestionada directamente con Keycloak</li>
             </ul>
           </div>
         }
@@ -350,11 +350,11 @@ export class DashboardComponent implements OnInit {
     this.error.set(null);
 
     this.authService.getUserProfile().subscribe({
-      next: (user) => {
+      next: (user: User) => {
         this.user.set(user);
         this.loading.set(false);
       },
-      error: (err) => {
+      error: (err: any) => {
         console.error('Error cargando perfil de usuario:', err);
         this.error.set('No se pudo cargar la información del usuario');
         this.loading.set(false);
@@ -367,7 +367,7 @@ export class DashboardComponent implements OnInit {
       next: () => {
         this.router.navigate(['/login']);
       },
-      error: (err) => {
+      error: (err: any) => {
         console.error('Error durante logout:', err);
         // Redirigir a login de todos modos
         this.router.navigate(['/login']);
