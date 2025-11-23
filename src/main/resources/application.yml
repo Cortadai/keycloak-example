@@ -1,59 +1,42 @@
-# Configuración de la aplicación Spring Boot con Keycloak
+# ============================================================================
+# Configuración BÁSICA EDUCATIVA de Spring Boot con Keycloak
+# ============================================================================
+#
+# Esta es la configuración MÁS SIMPLE para aprender Keycloak con Spring Boot.
+#
+# ¿Qué hace esta configuración?
+# - Valida tokens JWT que vienen de Keycloak
+# - Extrae roles del token para control de acceso
+# - NO gestiona el login (eso lo hace Keycloak directamente)
+#
+# Para aprender más:
+# - Rama 'oauth2-resource-server': APIs M2M con Client Credentials
+# - Rama 'oauth2-bff': SPAs con Authorization Code + BFF
+# ============================================================================
 
 server:
-  port: 8081  # Puerto diferente al de Keycloak (que usa 8080)
+  port: 8081  # Puerto de nuestra API (Keycloak usa 9090)
 
 spring:
   application:
-    name: keycloak-spring-demo
+    name: keycloak-spring-demo-basic
 
-  # Configuración de OAuth2 Client (para login)
   security:
     oauth2:
-      client:
-        registration:
-          keycloak:
-            # ID del client que crearás en Keycloak
-            client-id: spring-boot-client
-            # Secret del client (confidential client)
-            client-secret: tu-client-secret-aqui
-            # Tipo de autorización
-            authorization-grant-type: authorization_code
-            # A dónde redirigir después del login
-            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
-            # Scopes que solicitamos
-            scope:
-              - openid
-              - profile
-              - email
-        provider:
-          keycloak:
-            # URL base de tu Keycloak
-            issuer-uri: http://localhost:8080/realms/mi-realm
-            # Endpoint de autorización
-            authorization-uri: http://localhost:8080/realms/mi-realm/protocol/openid-connect/auth
-            # Endpoint para obtener tokens
-            token-uri: http://localhost:8080/realms/mi-realm/protocol/openid-connect/token
-            # Endpoint de información del usuario
-            user-info-uri: http://localhost:8080/realms/mi-realm/protocol/openid-connect/userinfo
-            # Endpoint para obtener la configuración JWKS (claves públicas)
-            jwk-set-uri: http://localhost:8080/realms/mi-realm/protocol/openid-connect/certs
-            # Campo que contiene el nombre de usuario
-            user-name-attribute: preferred_username
-
-      # Configuración de Resource Server (para validar tokens)
+      # Configuración de Resource Server
+      # Solo necesitamos decirle a Spring dónde está Keycloak
       resourceserver:
         jwt:
-          # URL para obtener las claves públicas que validan los JWT
-          jwk-set-uri: http://localhost:8080/realms/mi-realm/protocol/openid-connect/certs
-          # Issuer esperado en los tokens
-          issuer-uri: http://localhost:8080/realms/mi-realm
+          # issuer-uri: Spring obtiene AUTOMÁTICAMENTE toda la configuración desde aquí
+          # (authorization-uri, token-uri, jwk-set-uri, etc.)
+          issuer-uri: http://localhost:9090/realms/mi-realm
 
-# Configuración de logging para ver qué está pasando
+# Logging para aprendizaje (ver qué está pasando)
 logging:
   level:
-    org.springframework.security: DEBUG
+    org.springframework.security: INFO
     org.springframework.security.oauth2: DEBUG
+    com.example.keycloak: DEBUG
 
 ---
 # Perfil de desarrollo local

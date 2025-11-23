@@ -2,7 +2,10 @@
 
 Ejemplos básicos para usar y probar la aplicación.
 
-> 💡 **Tip**: Para ejemplos más completos y scripts automatizados, ver la rama **[oauth2-authorization-code](../../tree/oauth2-authorization-code)**
+> **Rama:** `main` - Versión educativa básica
+> **Nivel:** 🌱 Principiante
+
+---
 
 ## 📋 Tabla de Contenidos
 
@@ -10,6 +13,7 @@ Ejemplos básicos para usar y probar la aplicación.
 2. [Usuarios de Prueba](#2-usuarios-de-prueba)
 3. [Ejemplos con cURL](#3-ejemplos-con-curl)
 4. [Endpoints](#4-endpoints)
+5. [Inspeccionar Token JWT](#5-inspeccionar-token-jwt)
 
 ---
 
@@ -18,10 +22,10 @@ Ejemplos básicos para usar y probar la aplicación.
 ### Verificaciones
 
 ```bash
-# Keycloak disponible
-curl http://localhost:8080
+# Keycloak disponible (puerto 9090)
+curl http://localhost:9090
 
-# Spring Boot corriendo
+# Spring Boot corriendo (puerto 8081)
 curl http://localhost:8081/public/hello
 ```
 
@@ -37,8 +41,8 @@ curl http://localhost:8081/public/hello
 
 | Usuario | Contraseña | Roles |
 |---------|------------|-------|
-| usuario1 | password123 | USER |
-| admin1 | admin123 | USER, ADMIN |
+| usuario1 | password123 | user |
+| admin1 | admin123 | user, admin |
 
 ---
 
@@ -62,7 +66,7 @@ curl http://localhost:8081/public/hello
 
 **Usuario regular:**
 ```bash
-curl -X POST 'http://localhost:8080/realms/mi-realm/protocol/openid-connect/token' \
+curl -X POST 'http://localhost:9090/realms/mi-realm/protocol/openid-connect/token' \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   -d 'client_id=spring-boot-client' \
   -d 'client_secret=TU_SECRET' \
@@ -73,7 +77,7 @@ curl -X POST 'http://localhost:8080/realms/mi-realm/protocol/openid-connect/toke
 
 **Admin:**
 ```bash
-curl -X POST 'http://localhost:8080/realms/mi-realm/protocol/openid-connect/token' \
+curl -X POST 'http://localhost:9090/realms/mi-realm/protocol/openid-connect/token' \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   -d 'client_id=spring-boot-client' \
   -d 'client_secret=TU_SECRET' \
@@ -195,7 +199,33 @@ curl http://localhost:8081/api/admin/users \
 
 ---
 
-## 5. Windows PowerShell
+## 5. Inspeccionar Token JWT
+
+### jwt.io
+
+1. Ve a https://jwt.io
+2. Pega tu `access_token`
+3. Verás el payload:
+
+```json
+{
+  "preferred_username": "usuario1",
+  "email": "usuario1@example.com",
+  "realm_access": {
+    "roles": ["user"]
+  }
+}
+```
+
+### Comando (Linux/Mac)
+
+```bash
+echo $TOKEN | cut -d. -f2 | base64 -d | jq
+```
+
+---
+
+## 6. Windows PowerShell
 
 ### Obtener Token
 
@@ -209,7 +239,7 @@ $body = @{
 }
 
 $response = Invoke-RestMethod `
-  -Uri 'http://localhost:8080/realms/mi-realm/protocol/openid-connect/token' `
+  -Uri 'http://localhost:9090/realms/mi-realm/protocol/openid-connect/token' `
   -Method Post `
   -ContentType 'application/x-www-form-urlencoded' `
   -Body $body
@@ -228,32 +258,6 @@ $headers = @{
 Invoke-RestMethod `
   -Uri 'http://localhost:8081/api/user/me' `
   -Headers $headers
-```
-
----
-
-## 6. Inspeccionar Token JWT
-
-### jwt.io
-
-1. Ve a https://jwt.io
-2. Pega tu `access_token`
-3. Verás el payload:
-
-```json
-{
-  "preferred_username": "usuario1",
-  "email": "usuario1@example.com",
-  "realm_access": {
-    "roles": ["USER"]
-  }
-}
-```
-
-### Comando (Linux/Mac)
-
-```bash
-echo $TOKEN | cut -d. -f2 | base64 -d | jq
 ```
 
 ---
@@ -288,19 +292,66 @@ curl -i http://localhost:8081/public/hello
 ### Debugging
 
 Si tienes problemas:
-1. Verifica que Keycloak esté corriendo
-2. Verifica que el client secret sea correcto
-3. Verifica que el token no haya expirado
-4. Revisa los logs de Spring Boot
+
+1. **Verifica que Keycloak esté corriendo:**
+   ```bash
+   curl http://localhost:9090
+   ```
+
+2. **Verifica que el client secret sea correcto:**
+   - Ve a Keycloak → Clients → spring-boot-client → Credentials
+
+3. **Verifica que el token no haya expirado:**
+   - Los tokens duran 5 minutos (300 segundos) por defecto
+   - Obtén un nuevo token si es necesario
+
+4. **Revisa los logs de Spring Boot:**
+   - Busca mensajes de error en la consola
+
+---
+
+## 🎯 ¿Qué Aprendiste?
+
+Con estos ejemplos ahora sabes:
+
+✅ Cómo obtener un token JWT desde Keycloak
+✅ Cómo enviar el token en el header Authorization
+✅ Diferencia entre endpoints públicos y protegidos
+✅ Cómo funciona el control de acceso basado en roles (RBAC)
+✅ Cómo probar diferentes escenarios (401, 403, 200)
+✅ Arquitectura STATELESS (cada request incluye el token)
 
 ---
 
 ## 🚀 Siguiente Nivel
 
-Para testing más avanzado con:
-- Scripts automatizados
-- Colección de Postman completa
-- OAuth2 Login desde navegador
-- Refresh tokens
+Para funcionalidades más avanzadas:
 
-Revisa la rama **[oauth2-authorization-code](../../tree/oauth2-authorization-code)**
+### Rama `oauth2-resource-server`
+
+**Qué añade:**
+- Client Credentials (M2M)
+- Service Accounts
+
+**Cuándo usarla:**
+- Comunicación servicio-a-servicio
+- APIs M2M
+
+```bash
+git checkout oauth2-resource-server
+```
+
+### Rama `oauth2-bff`
+
+**Qué añade:**
+- Authorization Code Flow
+- Patrón BFF
+- Login desde navegador
+- Cookies HttpOnly
+
+**Cuándo usarla:**
+- SPAs modernas (React, Angular)
+
+```bash
+git checkout oauth2-bff
+```

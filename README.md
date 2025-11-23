@@ -1,191 +1,386 @@
-# Spring Boot + Keycloak - Demo Básico
+# Spring Boot + Keycloak - Versión Educativa Básica
 
-**Demo educativo básico** de autenticación y autorización con Spring Boot y Keycloak.
+> **Rama:** `main`
+> **Nivel:** 🌱 Principiante
+> **Propósito:** Primera toma de contacto con Keycloak y Spring Security
 
-> ⚠️ **IMPORTANTE**: Esta es una implementación **básica con fines educativos**.
-> Para **producción**, usa la rama **[oauth2-authorization-code](../../tree/oauth2-authorization-code)** que implementa best practices:
-> - ✅ OAuth2 Authorization Code Flow
-> - ✅ Client secret en variables de entorno
-> - ✅ Configuración optimizada con `issuer-uri`
-> - ✅ Dual authentication (OAuth2 Login + Resource Server)
+Esta es la implementación **MÁS SIMPLE** para aprender los conceptos básicos de autenticación con Keycloak.
 
-## 📋 Descripción
+---
 
-Este proyecto es una implementación educativa básica que demuestra:
+## 🎯 ¿Qué Aprenderás?
 
-- Validación de tokens JWT con Keycloak
-- Control de acceso basado en roles (RBAC)
-- Endpoints públicos y protegidos
-- Configuración básica de Spring Security con Keycloak
+Con esta rama aprenderás los **conceptos fundamentales**:
 
-## 🚀 Quick Start
+- ✅ Qué es un **token JWT** y cómo funciona
+- ✅ Cómo **validar tokens** con Spring Security
+- ✅ **Control de acceso basado en roles** (RBAC)
+- ✅ Diferencia entre endpoints públicos y protegidos
+- ✅ Arquitectura **STATELESS** (sin sesiones)
+- ✅ Cómo Keycloak organiza **roles** en el token
 
-### Prerrequisitos
+**No incluye:** Gestión de login, redirecciones, cookies, Client Credentials, ni BFF.
 
-- Java 17+
-- Maven 3.8+
-- Docker (para Keycloak)
+---
+
+## 📚 Ruta de Aprendizaje
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  PASO 1: main (esta rama)                                   │
+│  Nivel: 🌱 Principiante                                      │
+│  ────────────────────────────────────────────────────────   │
+│  ✓ Entiendes Resource Server                                │
+│  ✓ Entiendes validación JWT                                 │
+│  ✓ Entiendes roles y permisos                               │
+│  ✓ Arquitectura STATELESS                                   │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
+│  PASO 2: oauth2-resource-server                             │
+│  Nivel: 🌿 Intermedio                                        │
+│  ────────────────────────────────────────────────────────   │
+│  ✓ Client Credentials (M2M)                                 │
+│  ✓ Service Accounts                                         │
+│  ✓ Comunicación servicio-a-servicio                         │
+└─────────────────────────────────────────────────────────────┘
+                            ↓
+┌─────────────────────────────────────────────────────────────┐
+│  PASO 3: oauth2-bff                                         │
+│  Nivel: 🌳 Avanzado                                          │
+│  ────────────────────────────────────────────────────────   │
+│  ✓ Authorization Code Flow                                  │
+│  ✓ Patrón BFF para SPAs                                     │
+│  ✓ Cookies HttpOnly                                         │
+│  ✓ STATEFUL (sesiones)                                      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🚀 Inicio Rápido
 
 ### 1. Iniciar Keycloak
 
 ```bash
-docker run -p 8080:8080 \
+docker run -p 9090:8080 \
   -e KEYCLOAK_ADMIN=admin \
   -e KEYCLOAK_ADMIN_PASSWORD=admin \
-  quay.io/keycloak/keycloak:23.0.0 start-dev
+  quay.io/keycloak/keycloak:latest start-dev
 ```
 
-Accede a: http://localhost:8080
-- Usuario: `admin`
-- Contraseña: `admin`
+**Nota:** Mapeamos puerto `9090` del host → `8080` del contenedor.
 
 ### 2. Configurar Keycloak
 
-Ver guía detallada en **[SETUP.md](SETUP.md)**
+Sigue la guía: **[SETUP.md](SETUP.md)**
 
-Pasos básicos:
-1. Crear realm `mi-realm`
-2. Crear client `spring-boot-client`
-3. Crear roles `USER` y `ADMIN`
-4. Crear usuarios de prueba
+Resumen:
+1. Acceder a http://localhost:9090/admin
+2. Crear realm: `mi-realm`
+3. Crear client: `spring-boot-client`
+4. Crear roles: `user`, `admin`
+5. Crear usuarios de prueba
 
-### 3. Configurar la Aplicación
-
-Edita `src/main/resources/application.yml` y reemplaza:
-
-```yaml
-client-secret: tu-client-secret-aqui  # ← Pega tu client secret aquí
-```
-
-**⚠️ NOTA**: Este método NO es recomendado para producción. Ver rama `oauth2-authorization-code` para implementación correcta con variables de entorno.
-
-### 4. Ejecutar
+### 3. Ejecutar la Aplicación
 
 ```bash
 ./mvnw spring-boot:run
 ```
 
-La aplicación estará en: http://localhost:8081
+La API estará en: http://localhost:8081
 
-### 5. Probar
+### 4. Probar
 
-**Endpoint público:**
+Ver ejemplos completos en: **[USAGE.md](USAGE.md)**
+
+**Prueba rápida:**
 ```bash
+# Endpoint público (sin token)
 curl http://localhost:8081/public/hello
 ```
 
-**Obtener token y probar endpoint protegido:**
+---
 
-Ver ejemplos completos en **[USAGE.md](USAGE.md)**
+## 🎓 Conceptos Clave
 
-## 📁 Estructura del Proyecto
+### Resource Server
+
+Esta aplicación es un **Resource Server**:
+- ✅ Valida tokens JWT
+- ✅ Extrae roles del token
+- ✅ Protege endpoints
+- ❌ **NO** genera tokens (eso lo hace Keycloak)
+
+### STATELESS
+
+**Sin sesiones HTTP:**
+- Cada request debe incluir el token en el header
+- No se guarda estado en el servidor
+- Ideal para APIs REST
+
+### Flujo de Autenticación
 
 ```
-keycloak-spring-demo/
-├── src/main/java/com/example/keycloak/
-│   ├── config/
-│   │   └── SecurityConfig.java       # Configuración de seguridad
-│   ├── controller/
-│   │   ├── PublicController.java     # Endpoints públicos
-│   │   ├── UserController.java       # Endpoints USER
-│   │   └── AdminController.java      # Endpoints ADMIN
-│   └── model/
-│       └── UserInfo.java
-├── src/main/resources/
-│   └── application.yml               # ⚠️ Client secret hardcodeado
-├── README.md                         # Este archivo
-├── SETUP.md                          # Guía de configuración
-└── USAGE.md                          # Ejemplos de uso
+1. Usuario → Obtiene token de Keycloak (directamente)
+   POST http://localhost:9090/realms/mi-realm/protocol/openid-connect/token
+   Body: grant_type=password, username=usuario1, password=password123
+
+2. Keycloak → Devuelve token JWT
+
+3. Usuario → Llama a la API con el token
+   GET http://localhost:8081/api/user/me
+   Header: Authorization: Bearer {token}
+
+4. API → Valida token y responde
 ```
 
-## 🧪 Testing
+### Roles
 
-### Usuarios de Prueba
+**En Keycloak:**
+- Creas roles: `user`, `admin`
+- Asignas roles a usuarios
 
-| Usuario | Contraseña | Roles |
-|---------|------------|-------|
-| usuario1 | password123 | USER |
-| admin1 | admin123 | USER, ADMIN |
+**En el token JWT:**
+```json
+{
+  "realm_access": {
+    "roles": ["user", "admin"]
+  }
+}
+```
 
-### Endpoints Disponibles
-
-**Públicos:**
-- `GET /public/hello`
-- `GET /public/info`
-
-**Protegidos (ROLE_USER):**
-- `GET /api/user/me`
-- `GET /api/user/dashboard`
-- `GET /api/user/profile`
-
-**Protegidos (ROLE_ADMIN):**
-- `GET /api/admin/dashboard`
-- `GET /api/admin/users`
-
-## 📚 Documentación
-
-- **[SETUP.md](SETUP.md)** - Configuración de Keycloak y la aplicación
-- **[USAGE.md](USAGE.md)** - Ejemplos de uso con cURL y Postman
-
-## ⚠️ Limitaciones de esta Implementación
-
-Esta implementación básica tiene las siguientes limitaciones:
-
-1. **Client secret hardcodeado** en `application.yml` ❌
-   - Riesgo: Se puede commitear accidentalmente al repositorio
-   - Solución: Ver rama `oauth2-authorization-code`
-
-2. **Configuración verbose** ❌
-   - Define todos los endpoints manualmente
-   - Solución: Usar solo `issuer-uri` (ver rama `oauth2-authorization-code`)
-
-3. **No implementa OAuth2 Login** ❌
-   - Solo Resource Server (Bearer tokens)
-   - No soporta login desde navegador
-   - Solución: Ver rama `oauth2-authorization-code`
-
-4. **Solo Resource Owner Password Grant** ❌
-   - Flujo deprecado, no recomendado para producción
-   - Solución: Ver rama `oauth2-authorization-code` que implementa Authorization Code Flow
-
-## 🚀 Migrar a Producción
-
-Para llevar este proyecto a producción:
-
-1. **Cambia a la rama recomendada:**
-   ```bash
-   git checkout oauth2-authorization-code
-   ```
-
-2. **Revisa las mejoras:**
-   - OAuth2 Authorization Code Flow
-   - Client secret en variables de entorno
-   - Configuración simplificada
-   - Dual authentication (OAuth2 Login + Resource Server)
-   - Documentación completa
-
-## 🛠️ Tecnologías
-
-- **Spring Boot 3.2.0**
-- **Spring Security 6.2.0**
-- **Keycloak 23.0.0**
-- **JWT**
-- **OAuth2/OIDC**
-
-## 🎯 Uso Recomendado
-
-**Esta rama (main):**
-- ✅ Aprendizaje inicial de Keycloak
-- ✅ Entender conceptos básicos
-- ✅ Experimentación rápida
-- ❌ NO para producción
-
-**Rama oauth2-authorization-code:**
-- ✅ Implementación production-ready
-- ✅ Best practices de OAuth2
-- ✅ Seguridad mejorada
-- ✅ Para aplicaciones reales
+**En Spring Security:**
+- `user` → `ROLE_USER`
+- `admin` → `ROLE_ADMIN`
 
 ---
 
-**¿Listo para producción?** → Revisa la rama **[oauth2-authorization-code](../../tree/oauth2-authorization-code)** 🚀
+## 📂 Estructura del Proyecto
+
+```
+src/main/java/com/example/keycloak/
+├── config/
+│   └── SecurityConfig.java          # ⭐ Configuración de seguridad con MUCHOS comentarios
+├── controller/
+│   ├── PublicController.java        # Endpoints públicos (sin token)
+│   ├── UserController.java          # Endpoints con ROLE_USER
+│   └── AdminController.java         # Endpoints con ROLE_ADMIN
+└── model/
+    └── UserInfo.java
+
+src/main/resources/
+└── application.yml                  # ⭐ Configuración SIMPLE (solo issuer-uri)
+```
+
+---
+
+## 🧪 Endpoints Disponibles
+
+### Públicos (sin token)
+
+```bash
+GET /public/hello       # Saludo público
+GET /public/info        # Información de la API
+```
+
+### Protegidos (requieren token + ROLE_USER)
+
+```bash
+GET /api/user/me        # Información del usuario autenticado
+GET /api/user/dashboard # Dashboard de usuario
+GET /api/user/profile   # Perfil del usuario
+```
+
+### Protegidos (requieren token + ROLE_ADMIN)
+
+```bash
+GET /api/admin/dashboard  # Dashboard de administración
+GET /api/admin/users      # Lista de usuarios
+```
+
+---
+
+## 🔑 Configuración Técnica
+
+### application.yml
+
+```yaml
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9090/realms/mi-realm
+```
+
+**Eso es todo.** Spring obtiene automáticamente:
+- `jwk-set-uri` (claves públicas para validar el token)
+- `issuer` (emisor esperado en el token)
+- Toda la configuración OpenID Connect
+
+### SecurityConfig.java
+
+```java
+@Bean
+public SecurityFilterChain securityFilterChain(HttpSecurity http) {
+    http
+        .authorizeHttpRequests(auth -> auth
+            .requestMatchers("/public/**").permitAll()
+            .requestMatchers("/api/user/**").hasRole("USER")
+            .requestMatchers("/api/admin/**").hasRole("ADMIN")
+            .anyRequest().authenticated()
+        )
+        .oauth2ResourceServer(oauth2 -> oauth2
+            .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
+        )
+        .sessionManagement(session -> session
+            .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+        )
+        .csrf(csrf -> csrf.disable());
+
+    return http.build();
+}
+```
+
+**Características:**
+- ✅ Resource Server (valida JWT)
+- ✅ STATELESS (sin sesiones)
+- ✅ CSRF deshabilitado (apropiado para APIs REST)
+- ❌ NO oauth2Login (no gestiona autenticación)
+
+---
+
+## 🐛 Troubleshooting
+
+### Error: 401 Unauthorized
+
+**Causa:** Token ausente, inválido o expirado.
+
+**Solución:**
+```bash
+# Verificar que envías el header correcto
+-H "Authorization: Bearer {token}"
+
+# Obtener un nuevo token
+curl -X POST http://localhost:9090/realms/mi-realm/protocol/openid-connect/token \
+  -d "grant_type=password" \
+  -d "client_id=spring-boot-client" \
+  -d "username=usuario1" \
+  -d "password=password123"
+```
+
+### Error: 403 Forbidden
+
+**Causa:** Token válido pero sin el rol requerido.
+
+**Solución:**
+- Verificar roles del usuario en Keycloak
+- Asignar el rol necesario: `user` o `admin`
+
+### Error: Invalid token signature
+
+**Causa:** URL de Keycloak incorrecta.
+
+**Solución:**
+```bash
+# Verificar que Keycloak está en puerto 9090
+curl http://localhost:9090/realms/mi-realm/.well-known/openid-configuration
+```
+
+---
+
+## 📖 Documentación
+
+- **[SETUP.md](SETUP.md)** - Configuración paso a paso de Keycloak
+- **[USAGE.md](USAGE.md)** - Ejemplos de uso con cURL y Postman
+
+---
+
+## 🎯 Limitaciones de Esta Versión
+
+Esta es una versión **educativa básica**. No incluye:
+
+❌ Client Credentials (M2M)
+❌ Service Accounts
+❌ Authorization Code Flow
+❌ Patrón BFF
+❌ Cookies HttpOnly
+❌ CORS configurado
+
+**Para aprender estos conceptos:** Ver ramas `oauth2-resource-server` y `oauth2-bff`
+
+---
+
+## 🚀 Siguiente Paso
+
+Una vez que domines esta rama, continúa con:
+
+### Rama `oauth2-resource-server`
+
+**Qué añade:**
+- Client Credentials (M2M)
+- Service Accounts
+- Documentación extensa de M2M
+
+**Cuándo usarla:**
+- APIs backend que se comunican entre sí
+- Microservicios
+- Cron jobs que llaman APIs
+
+```bash
+git checkout oauth2-resource-server
+```
+
+### Rama `oauth2-bff`
+
+**Qué añade:**
+- Authorization Code Flow completo
+- Patrón BFF (Backend for Frontend)
+- Cookies HttpOnly
+- STATEFUL (sesiones)
+- Integración con SPAs (React, Angular)
+
+**Cuándo usarla:**
+- Aplicaciones web modernas (SPAs)
+- Máxima seguridad para frontend
+
+```bash
+git checkout oauth2-bff
+```
+
+---
+
+## 🛠️ Tecnologías
+
+- **Spring Boot:** 3.2.0
+- **Spring Security:** 6.2.0
+- **Keycloak:** 23.0.0+ (puerto 9090)
+- **Java:** 17+
+
+---
+
+## ✅ Checklist de Aprendizaje
+
+Marca lo que ya dominas:
+
+**Conceptos básicos:**
+- [ ] Entiendo qué es un token JWT
+- [ ] Sé cómo validar un token con Spring Security
+- [ ] Entiendo STATELESS vs STATEFUL
+- [ ] Sé configurar roles en Keycloak
+- [ ] Entiendo `@PreAuthorize` y control de acceso
+
+**Siguientes pasos:**
+- [ ] Probé obtener un token de Keycloak
+- [ ] Probé llamar endpoints protegidos
+- [ ] Entiendo cómo Spring extrae roles del token
+- [ ] Listo para pasar a `oauth2-resource-server`
+
+---
+
+**¿Listo para más?** → Explora las ramas avanzadas:
+- **oauth2-resource-server** - APIs M2M
+- **oauth2-bff** - SPAs modernas
+
+**¿Dudas?** Revisa [SETUP.md](SETUP.md) y [USAGE.md](USAGE.md)

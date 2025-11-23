@@ -1,8 +1,11 @@
 # Configuración - Keycloak + Spring Boot (Básico)
 
-Guía de configuración básica para la versión educativa del proyecto.
+Guía paso a paso para configurar Keycloak desde cero y conectarlo con Spring Boot.
 
-> ⚠️ **Para producción**: Ver rama **[oauth2-authorization-code](../../tree/oauth2-authorization-code)** que implementa configuración segura con variables de entorno.
+> **Rama:** `main` - Versión educativa básica
+> **Nivel:** 🌱 Principiante
+
+---
 
 ## 📋 Tabla de Contenidos
 
@@ -15,35 +18,24 @@ Guía de configuración básica para la versión educativa del proyecto.
 
 ## 1. Instalar Keycloak
 
-### Opción A: Docker (Recomendado)
+### Docker (Recomendado)
 
 ```bash
-docker run -p 8080:8080 \
+docker run -p 9090:8080 \
   -e KEYCLOAK_ADMIN=admin \
   -e KEYCLOAK_ADMIN_PASSWORD=admin \
-  quay.io/keycloak/keycloak:23.0.0 start-dev
+  quay.io/keycloak/keycloak:latest start-dev
 ```
 
-### Opción B: Descarga Manual
-
-1. Descarga desde: https://www.keycloak.org/downloads
-2. Descomprime
-3. Ejecuta:
-   ```bash
-   # Windows
-   bin\kc.bat start-dev
-
-   # Linux/Mac
-   bin/kc.sh start-dev
-   ```
+**Nota:** Mapeamos puerto `9090` del host → `8080` del contenedor.
 
 ### Verificar
 
 ```bash
-curl http://localhost:8080
+curl http://localhost:9090
 ```
 
-O abre: http://localhost:8080
+O abre en navegador: http://localhost:9090
 
 ---
 
@@ -51,9 +43,8 @@ O abre: http://localhost:8080
 
 ### Paso 1: Acceder a Admin Console
 
-1. http://localhost:8080
-2. Click "Administration Console"
-3. Login: `admin` / `admin`
+1. Abre: http://localhost:9090/admin
+2. Login: `admin` / `admin`
 
 ### Paso 2: Crear Realm
 
@@ -75,7 +66,9 @@ O abre: http://localhost:8080
 **Capability config:**
 - **Client authentication**: `ON`
 - **Authorization**: `OFF`
-- **Authentication flow**: ✅ Standard flow, ✅ Direct access grants
+- **Authentication flow**:
+  - ✅ Standard flow
+  - ✅ Direct access grants
 - "Next"
 
 **Login settings:**
@@ -87,19 +80,19 @@ O abre: http://localhost:8080
 
 1. Tab "Credentials"
 2. **Copia el Client secret**
-3. Guárdalo - lo usarás en `application.yml`
+3. Lo necesitarás para obtener tokens (pero NO lo guardamos en `application.yml` en esta versión básica)
 
 ### Paso 5: Crear Roles
 
 1. Menu lateral → "Realm roles"
 2. "Create role"
 
-**Rol USER:**
-- **Role name**: `USER`
+**Rol user:**
+- **Role name**: `user`
 - "Save"
 
-**Rol ADMIN:**
-- **Role name**: `ADMIN`
+**Rol admin:**
+- **Role name**: `admin`
 - "Save"
 
 ### Paso 6: Crear Usuarios
@@ -123,7 +116,7 @@ O abre: http://localhost:8080
 **Asignar rol:**
 1. Tab "Role mapping"
 2. "Assign role"
-3. Selecciona `USER`
+3. Selecciona `user`
 4. "Assign"
 
 #### Usuario Admin
@@ -132,37 +125,37 @@ Repite con:
 - **Username**: `admin1`
 - **Email**: `admin1@example.com`
 - **Password**: `admin123`
-- **Roles**: `USER` y `ADMIN` (ambos)
+- **Roles**: `user` y `admin` (ambos)
 
 ---
 
 ## 3. Configurar Spring Boot
 
-### Editar application.yml
+### ¿Qué configurar?
 
-Abre `src/main/resources/application.yml` y **pega tu client secret**:
+**¡Nada!** El archivo `application.yml` ya está configurado:
 
 ```yaml
 spring:
   security:
     oauth2:
-      client:
-        registration:
-          keycloak:
-            client-id: spring-boot-client
-            client-secret: PEGA_TU_SECRET_AQUI  # ← ACTUALIZAR
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9090/realms/mi-realm
 ```
 
-**⚠️ IMPORTANTE**:
-- Este método NO es seguro para producción
-- El secret queda visible en el código
-- Ver rama `oauth2-authorization-code` para método seguro
+**Eso es todo.** Spring Boot obtiene automáticamente:
+- Las claves públicas para validar tokens
+- La configuración de OpenID Connect
+- Todo lo necesario
 
 ### Ejecutar
 
 ```bash
 ./mvnw spring-boot:run
 ```
+
+La API estará en: http://localhost:8081
 
 ---
 
@@ -177,14 +170,15 @@ curl http://localhost:8081/public/hello
 **Esperado:**
 ```json
 {
-  "message": "¡Hola! Este es un endpoint público."
+  "message": "¡Hola! Este es un endpoint público.",
+  "info": "No necesitas estar autenticado para ver esto."
 }
 ```
 
 ### Test 2: Obtener Token
 
 ```bash
-curl -X POST 'http://localhost:8080/realms/mi-realm/protocol/openid-connect/token' \
+curl -X POST 'http://localhost:9090/realms/mi-realm/protocol/openid-connect/token' \
   -H 'Content-Type: application/x-www-form-urlencoded' \
   -d 'client_id=spring-boot-client' \
   -d 'client_secret=TU_SECRET' \
@@ -192,6 +186,8 @@ curl -X POST 'http://localhost:8080/realms/mi-realm/protocol/openid-connect/toke
   -d 'username=usuario1' \
   -d 'password=password123'
 ```
+
+**Reemplaza `TU_SECRET`** con el client secret que copiaste en el Paso 4.
 
 **Esperado:**
 ```json
@@ -205,14 +201,19 @@ curl -X POST 'http://localhost:8080/realms/mi-realm/protocol/openid-connect/toke
 ### Test 3: Endpoint Protegido
 
 ```bash
+# Primero guarda el token
+export TOKEN="eyJhbGc..."
+
+# Luego prueba el endpoint
 curl http://localhost:8081/api/user/me \
-  -H "Authorization: Bearer {TOKEN}"
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 **Esperado:**
 ```json
 {
   "username": "usuario1",
+  "email": "usuario1@example.com",
   "roles": ["ROLE_USER"],
   "authenticated": true
 }
@@ -222,13 +223,13 @@ curl http://localhost:8081/api/user/me \
 
 ## 📋 Checklist
 
-- [ ] Keycloak corriendo en puerto 8080
+- [ ] Keycloak corriendo en puerto 9090
 - [ ] Realm `mi-realm` creado
 - [ ] Client `spring-boot-client` creado
-- [ ] Client secret copiado y pegado en `application.yml`
-- [ ] Roles `USER` y `ADMIN` creados
-- [ ] Usuario `usuario1` creado con rol USER
-- [ ] Usuario `admin1` creado con roles USER y ADMIN
+- [ ] Client secret copiado (para usar en los tests)
+- [ ] Roles `user` y `admin` creados
+- [ ] Usuario `usuario1` creado con rol user
+- [ ] Usuario `admin1` creado con roles user y admin
 - [ ] Aplicación Spring Boot inicia sin errores
 - [ ] Endpoint público funciona
 - [ ] Puedes obtener token
@@ -236,18 +237,55 @@ curl http://localhost:8081/api/user/me \
 
 ---
 
+## 🎯 ¿Qué Aprendiste?
+
+Con esta configuración básica ahora entiendes:
+
+✅ Cómo levantar Keycloak con Docker
+✅ Estructura básica: Realm → Client → Roles → Usuarios
+✅ Cómo Spring Boot valida tokens automáticamente con `issuer-uri`
+✅ Diferencia entre endpoints públicos y protegidos
+✅ Cómo obtener un token JWT desde Keycloak
+✅ Arquitectura STATELESS (cada request incluye el token)
+
+---
+
 ## 🚀 Siguiente Paso
 
-Para implementación production-ready, revisa la rama:
+Una vez que domines esta configuración básica, continúa con:
 
-**[oauth2-authorization-code](../../tree/oauth2-authorization-code)**
+### Rama `oauth2-resource-server`
 
-Mejoras incluidas:
-- ✅ Client secret en variables de entorno
-- ✅ OAuth2 Authorization Code Flow
-- ✅ Configuración simplificada con `issuer-uri`
-- ✅ Mappers configurados
-- ✅ Dual authentication
+**Qué añade:**
+- Client Credentials (M2M)
+- Service Accounts
+- Comunicación servicio-a-servicio
+
+**Cuándo usarla:**
+- APIs backend que se comunican entre sí
+- Microservicios
+- Cron jobs que llaman APIs
+
+```bash
+git checkout oauth2-resource-server
+```
+
+### Rama `oauth2-bff`
+
+**Qué añade:**
+- Authorization Code Flow completo
+- Patrón BFF (Backend for Frontend)
+- Cookies HttpOnly
+- STATEFUL (sesiones)
+- Integración con SPAs (React, Angular)
+
+**Cuándo usarla:**
+- Aplicaciones web modernas (SPAs)
+- Máxima seguridad para frontend
+
+```bash
+git checkout oauth2-bff
+```
 
 ---
 
