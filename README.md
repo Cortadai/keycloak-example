@@ -1,28 +1,36 @@
-# Keycloak Spring Boot + Angular - Patrón BFF
+# Keycloak Spring Boot + Angular - SPA con Authorization Code + PKCE
 
 ## 🎯 Descripción
 
-Aplicación de demostración que implementa el **patrón Backend for Frontend (BFF)** con autenticación OAuth2 mediante Keycloak, utilizando cookies HttpOnly para máxima seguridad.
+Aplicación de demostración que implementa el patrón **SPA tradicional** con autenticación OAuth2 mediante Keycloak, utilizando **Authorization Code Flow + PKCE**.
 
 ### Tecnologías Principales
 
-- **Backend**: Spring Boot 3.x + Spring Security OAuth2
-- **Frontend**: Angular 21 (Standalone Components + Signals)
-- **Autenticación**: Keycloak (OAuth2 Authorization Code Flow)
-- **Seguridad**: JWT en cookies HttpOnly + SameSite=Strict
+- **Backend**: Spring Boot 3.x + Spring Security (Resource Server)
+- **Frontend**: Angular 21 + angular-oauth2-oidc
+- **Autenticación**: Keycloak (OAuth2 Authorization Code + PKCE)
+- **Token Storage**: localStorage (accesible desde JavaScript)
 
 ---
 
-## 🏗️ Arquitectura BFF
+## 🏗️ Arquitectura SPA + PKCE
 
-### ¿Qué es el patrón BFF?
+### ¿Qué es PKCE?
 
-El **Backend for Frontend** es un patrón arquitectónico donde:
+**PKCE** (Proof Key for Code Exchange) es una extensión de OAuth2 que protege el Authorization Code Flow en clientes públicos (SPAs, aplicaciones móviles).
 
-1. El **frontend NO almacena tokens** en localStorage/sessionStorage (vulnerable a XSS)
-2. El **backend gestiona los tokens** y los almacena en cookies HttpOnly
-3. El **frontend envía cookies automáticamente** con cada petición
-4. El **backend valida tokens** y protege endpoints
+### ¿En qué se diferencia de BFF?
+
+| Aspecto | SPA + PKCE (esta rama) | BFF (oauth2-bff) |
+|---------|------------------------|-------------------|
+| **Token storage** | localStorage/sessionStorage | Cookie HttpOnly |
+| **Acceso al token** | JavaScript puede leer | JavaScript NO puede leer |
+| **Login** | SPA → Keycloak directamente | SPA → Backend → Keycloak |
+| **Backend** | Solo Resource Server | Resource Server + OAuth2 Client |
+| **Sesiones** | STATELESS | STATEFUL |
+| **Seguridad XSS** | ⚠️ Vulnerable | ✅ Protegido |
+| **Complejidad** | 🟢 Simple | 🟡 Moderada |
+| **Uso típico** | APIs públicas, low-risk | Apps empresariales, high-security |
 
 ### Flujo de Autenticación
 
@@ -32,43 +40,51 @@ El **Backend for Frontend** es un patrón arquitectónico donde:
 │  :4200  │         │    :8081     │         │  :9090   │
 └────┬────┘         └──────┬───────┘         └────┬─────┘
      │                     │                      │
-     │ 1. GET /api/auth/login                    │
-     ├────────────────────>│                      │
-     │                     │ 2. OAuth2 redirect   │
-     │                     ├─────────────────────>│
-     │ 3. Login form       │                      │
+     │ 1. Click "Login"    │                      │
+     │ 2. Generate PKCE    │                      │
+     │    code_verifier & code_challenge          │
+     │                     │                      │
+     │ 3. Redirect to Keycloak with code_challenge
+     ├─────────────────────┼─────────────────────>│
+     │                     │                      │
+     │ 4. Login form       │                      │
      │<────────────────────┼──────────────────────┤
      │                     │                      │
-     │ 4. Credentials      │                      │
+     │ 5. Submit credentials                      │
      ├─────────────────────┼─────────────────────>│
-     │                     │ 5. Authorization code│
-     │                     │<─────────────────────┤
      │                     │                      │
-     │                     │ 6. Exchange code for JWT
-     │                     ├─────────────────────>│
-     │                     │<─────────────────────┤
-     │                     │ 7. JWT token         │
+     │ 6. Authorization code                      │
+     │<────────────────────┼──────────────────────┤
      │                     │                      │
-     │ 8. Set-Cookie: ACCESS_TOKEN (HttpOnly)    │
-     │<────────────────────┤                      │
+     │ 7. Exchange code + code_verifier for tokens
+     ├─────────────────────┼─────────────────────>│
      │                     │                      │
-     │ 9. GET /api/user/me │                      │
-     │    Cookie: ACCESS_TOKEN                    │
+     │ 8. JWT tokens (access + refresh)           │
+     │<────────────────────┼──────────────────────┤
+     │                     │                      │
+     │ 9. Store in localStorage                   │
+     │                     │                      │
+     │ 10. GET /api/user/me                       │
+     │     Header: Authorization: Bearer {token}  │
      ├────────────────────>│                      │
-     │                     │ 10. Validate JWT     │
-     │                     │ 11. Extract roles    │
+     │                     │ 11. Validate JWT     │
+     │                     │ 12. Extract roles    │
      │<────────────────────┤                      │
-     │ 12. User data       │                      │
+     │ 13. User data       │                      │
 ```
 
 ### Características de Seguridad
 
-✅ **Cookies HttpOnly**: JavaScript no puede acceder al token
-✅ **SameSite=Strict**: Protección automática contra CSRF
+✅ **PKCE**: Protege contra interceptación del authorization code
 ✅ **CORS configurado**: Solo origins específicos permitidos
-✅ **Validación dual**: Frontend (guards) + Backend (@PreAuthorize)
-✅ **Session Management**: STATEFUL para cookies de sesión
+✅ **Validación JWT**: Backend valida todos los tokens
 ✅ **Role-Based Access Control**: Roles de Keycloak extraídos automáticamente
+✅ **STATELESS**: Sin sesiones en backend
+
+⚠️ **Limitaciones de seguridad:**
+- Token accesible desde JavaScript (vulnerable a XSS)
+- Requiere Content Security Policy estricta
+- Sanitización de inputs crítica
 
 ---
 
@@ -78,33 +94,27 @@ El **Backend for Frontend** es un patrón arquitectónico donde:
 keycloak-spring-demo/
 ├── src/main/java/com/example/keycloak/
 │   ├── config/
-│   │   ├── SecurityConfig.java              # Configuración BFF
-│   │   └── OAuth2LoginSuccessHandler.java   # Gestión de cookies
+│   │   └── SecurityConfig.java              # Resource Server STATELESS
 │   ├── controller/
-│   │   ├── AuthController.java              # Endpoints de autenticación
-│   │   ├── UserController.java              # Endpoints para usuarios
-│   │   ├── AdminController.java             # Endpoints para admins
+│   │   ├── AuthController.java              # Solo /status y /info
+│   │   ├── UserController.java              # Endpoints USER
+│   │   ├── AdminController.java             # Endpoints ADMIN
 │   │   └── PublicController.java            # Endpoints públicos
-│   ├── filter/
-│   │   └── JwtCookieFilter.java             # Extrae JWT de cookies
 │   └── model/
 │       └── UserInfo.java                    # DTOs
 │
 ├── frontend/src/app/
 │   ├── core/
-│   │   ├── models/user.model.ts             # Interfaces TypeScript
-│   │   ├── services/auth.service.ts         # Servicio de autenticación
-│   │   ├── guards/auth.guard.ts             # Guards de rutas
-│   │   └── interceptors/auth.interceptor.ts # withCredentials
-│   ├── features/
-│   │   ├── login/                           # Componente de login
-│   │   └── dashboard/                       # Dashboard del usuario
-│   ├── app.config.ts                        # Configuración de Angular
+│   │   ├── services/
+│   │   │   └── auth.service.ts              # OAuthService + PKCE
+│   │   ├── guards/
+│   │   │   └── auth.guard.ts                # Guards sin HTTP calls
+│   │   └── interceptors/
+│   │       └── auth.interceptor.ts          # Authorization header
+│   ├── app.config.ts                        # provideOAuthClient()
 │   └── app.routes.ts                        # Rutas protegidas
 │
-├──  BACK_BFF.md                             # Documentación del backend
-├──  FRONT_BFF.md                            # Documentación del frontend
-└──  README.md                               # Este archivo
+└── README.md                                # Este archivo
 ```
 
 ---
@@ -128,45 +138,57 @@ docker run -d \
   quay.io/keycloak/keycloak:latest start-dev
 ```
 
-**Configurar Keycloak:**
-1. Acceder a `http://localhost:9090`
+### Paso 2: Configurar Keycloak para PKCE
+
+1. Acceder a `http://localhost:9090/admin`
 2. Login con admin/admin
 3. Crear realm: `mi-realm`
-4. Crear client: `spring-boot-client` (Confidential)
-5. Configurar:
-   - Valid Redirect URIs: `http://localhost:8081/*`
-   - Web Origins: `http://localhost:4200`
-6. Crear roles: `user`, `admin`
-7. Crear usuario de prueba y asignar roles
+4. Crear client: `spring-boot-client`
+   - **Client type**: `OpenID Connect`
+   - **Client authentication**: `OFF` ← CRÍTICO (cliente público)
+   - **Standard flow**: `ON`
+   - **Direct access grants**: `OFF` (no necesario para PKCE)
+   - **Valid Redirect URIs**: `http://localhost:4200/*`
+   - **Web Origins**: `http://localhost:4200`
+   - **Advanced Settings**:
+     - **Proof Key for Code Exchange Code Challenge Method**: `S256` ← CRÍTICO
+5. Crear roles: `user`, `admin`
+6. Crear usuarios de prueba y asignar roles
 
-### Paso 2: Ejecutar Backend
+### Paso 3: Ejecutar Backend
 
 ```bash
-# Actualizar client-secret en application.yml
 mvn clean install
 mvn spring-boot:run
 ```
 
-Verificar: `http://localhost:8081/public/status`
+Verificar: `http://localhost:8081/public/hello`
 
-### Paso 3: Ejecutar Frontend
+### Paso 4: Instalar Dependencias Frontend
 
 ```bash
 cd frontend
 npm install
+```
+
+### Paso 5: Ejecutar Frontend
+
+```bash
 npm start
 ```
 
 Verificar: `http://localhost:4200`
 
-### Paso 4: Probar
+### Paso 6: Probar
 
 1. Navegar a `http://localhost:4200`
-2. Click en "Login con Keycloak"
-3. Autenticarse en Keycloak
-4. Verificar dashboard con información del usuario
-5. Abrir DevTools → Application → Cookies
-6. Verificar cookie `ACCESS_TOKEN` con HttpOnly=true
+2. Click en "Login"
+3. Angular genera PKCE y redirige a Keycloak
+4. Autenticarse en Keycloak
+5. Keycloak redirige de vuelta a Angular
+6. Angular intercambia code por tokens
+7. Tokens guardados en localStorage
+8. Verificar en DevTools → Application → Local Storage
 
 ---
 
@@ -176,11 +198,10 @@ Verificar: `http://localhost:4200`
 
 | Endpoint | Método | Acceso | Descripción |
 |----------|--------|--------|-------------|
-| `/api/auth/login` | GET | Público | Inicia OAuth2 con Keycloak |
-| `/api/auth/status` | GET | Público | Verifica sesión activa |
-| `/api/auth/logout` | POST | Autenticado | Cierra sesión |
+| `/api/auth/status` | GET | Autenticado | Verifica token válido |
+| `/api/auth/info` | GET | Público | Información del flujo PKCE |
 
-### Usuario (Rol: USER)
+### Usuario (Rol: user)
 
 | Endpoint | Método | Descripción |
 |----------|--------|-------------|
@@ -188,7 +209,7 @@ Verificar: `http://localhost:4200`
 | `/api/user/profile` | GET | Perfil completo |
 | `/api/user/dashboard` | GET | Dashboard del usuario |
 
-### Admin (Rol: ADMIN)
+### Admin (Rol: admin)
 
 | Endpoint | Método | Descripción |
 |----------|--------|-------------|
@@ -202,28 +223,6 @@ Verificar: `http://localhost:4200`
 |----------|--------|-------------|
 | `/public/hello` | GET | Endpoint de prueba |
 | `/public/info` | GET | Información de la API |
-| `/public/status` | GET | Health check |
-
----
-
-## 📚 Documentación Detallada
-
-### Backend
-
-Ver **[docs/backend/README.md](docs/backend/BACK_BFF.md)** para:
-- Arquitectura del backend
-- Configuración de Spring Security
-- Gestión de cookies HttpOnly
-- Extracción de roles de Keycloak
-- Testing y troubleshooting
-
-### Frontend
-
-Ver **[docs/frontend/README.md](docs/frontend/FRONT_BFF.md)** para:
-- Arquitectura del frontend
-- Servicios y guards de Angular
-- Componentes y routing
-- Testing y troubleshooting
 
 ---
 
@@ -235,44 +234,115 @@ Ver **[docs/frontend/README.md](docs/frontend/FRONT_BFF.md)** para:
 - **Spring Boot**: 8081
 - **Angular**: 4200
 
-### Variables de Entorno
+### Backend (`application.yml`)
 
-**Backend** (`application.yml`):
 ```yaml
-app:
-  frontend:
-    url: http://localhost:4200
-  cookie:
-    secure: false  # true en producción (HTTPS)
-    max-age: 3600  # 1 hora
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: http://localhost:9090/realms/mi-realm
 ```
 
-**Frontend**:
-- API URL: `http://localhost:8081/api` (hardcoded en `auth.service.ts`)
-- Para producción: crear environment files
+### Frontend (`auth.service.ts`)
+
+```typescript
+const authConfig: AuthConfig = {
+  issuer: 'http://localhost:9090/realms/mi-realm',
+  clientId: 'spring-boot-client',
+  redirectUri: window.location.origin,
+  responseType: 'code',
+  scope: 'openid profile email',
+  usePkce: true  // ← CRÍTICO
+};
+```
 
 ---
 
-## ✅ Checklist de Producción
+## 📊 Comparación con Otras Ramas
 
-### Backend
-- [ ] Cambiar `cookie.secure: true` (requiere HTTPS)
-- [ ] Actualizar CORS a dominio de producción
-- [ ] Client-secret como variable de entorno
-- [ ] Habilitar CSRF
-- [ ] Logs a nivel INFO
+### Rama `main` - Resource Server Básico
 
-### Frontend
-- [ ] Crear environment files (prod/dev)
-- [ ] API URL dinámica desde environment
-- [ ] Build optimizado: `ng build --configuration production`
-- [ ] Content Security Policy
+**Qué es:**
+- Backend Resource Server
+- Sin frontend
+- Tokens obtenidos con cURL
 
-### Keycloak
-- [ ] Valid Redirect URIs de producción
-- [ ] Web Origins de producción
-- [ ] Habilitar HTTPS
-- [ ] Backup de configuración
+**Cuándo usar:**
+- Aprender conceptos básicos
+- APIs sin frontend
+
+**Complejidad:** 🌱 Principiante
+
+---
+
+### Rama `oauth2-resource-server` - M2M
+
+**Qué es:**
+- Client Credentials
+- Service Accounts
+- M2M communication
+
+**Cuándo usar:**
+- APIs backend que se comunican entre sí
+- Microservicios
+- Cron jobs
+
+**Complejidad:** 🌿 Intermedio
+
+---
+
+### Rama `oauth2-spa-pkce` - SPA Tradicional (ESTA RAMA)
+
+**Qué es:**
+- Authorization Code + PKCE
+- JWT en localStorage
+- SPA gestiona autenticación
+
+**Cuándo usar:**
+- SPAs (React, Angular, Vue)
+- APIs públicas
+- Low-medium security requirements
+- CORS entre dominios
+
+**Ventajas:**
+- ✅ Simple de implementar
+- ✅ Frontend tiene control total
+- ✅ CORS fácil
+
+**Desventajas:**
+- ⚠️ Token accesible desde JavaScript
+- ⚠️ Vulnerable a XSS
+- ⚠️ Requiere CSP estricta
+
+**Complejidad:** 🌳 Avanzado
+
+---
+
+### Rama `oauth2-bff` - BFF con Cookies
+
+**Qué es:**
+- Authorization Code (sin PKCE)
+- Cookies HttpOnly
+- Backend gestiona tokens
+
+**Cuándo usar:**
+- SPAs empresariales
+- High security requirements
+- Mismo dominio backend/frontend
+
+**Ventajas:**
+- ✅ Máxima seguridad (HttpOnly cookies)
+- ✅ Token NO accesible desde JavaScript
+- ✅ Protección contra XSS
+
+**Desventajas:**
+- ⚠️ Más complejo
+- ⚠️ Requiere backend para login
+- ⚠️ CORS con credentials
+
+**Complejidad:** 🌲 Avanzado+
 
 ---
 
@@ -280,63 +350,138 @@ app:
 
 ### Seguridad
 - OAuth2 Authorization Code Flow
-- Patrón Backend for Frontend (BFF)
-- Cookies HttpOnly vs localStorage
-- CSRF y SameSite cookies
-- CORS con credentials
+- PKCE (Proof Key for Code Exchange)
 - JWT validation y RBAC
+- XSS risks y mitigaciones
+- Content Security Policy
 
 ### Tecnologías
-- Spring Security OAuth2 Client + Resource Server
-- Keycloak Integration
-- Angular Standalone Components
-- Angular Signals
-- Functional Guards e Interceptors
-- RxJS Observables
+- Spring Security Resource Server
+- angular-oauth2-oidc
+- Keycloak public clients
+- Token storage strategies
+- Guard-based authorization
+
+---
+
+## ⚠️ Seguridad en Producción
+
+### CRÍTICO para producción:
+
+1. **Content Security Policy**
+   ```html
+   <meta http-equiv="Content-Security-Policy"
+         content="default-src 'self'; script-src 'self'">
+   ```
+
+2. **Sanitización de inputs**
+   - Usar DomSanitizer en Angular
+   - Validar todos los inputs del usuario
+
+3. **HTTPS obligatorio**
+   - Tokens solo por HTTPS
+   - Secure flag en producción
+
+4. **Token rotation**
+   - Implementar refresh token automático
+   - Tokens de corta duración
+
+5. **Logging seguro**
+   - NO loguear tokens
+   - Monitorear intentos de acceso
 
 ---
 
 ## 🚧 Mejoras Futuras (Opcional)
 
-1. **Refresh Token Automático Avanzado**
+1. **Refresh Token Automático**
    - Interceptor que detecta 401 y refresh transparente
 
-2. **Logout Global SSO**
-   - Implementar `end_session_endpoint` de Keycloak
-   - Logout en todas las aplicaciones del SSO
+2. **Silent Refresh**
+   - iframe para renovar tokens sin logout
 
-3. **HTTPS en Desarrollo**
-   - Certificados self-signed
-   - Cookie Secure=true
+3. **Session Monitoring**
+   - Detectar inactividad y hacer logout
 
-4. **Página de Admin**
-   - Solo accesible con rol ADMIN
-   - Uso de `roleGuard('ROLE_ADMIN')`
+4. **Multi-tab Sync**
+   - Sincronizar estado entre pestañas
 
 ---
 
 ## ❓ Troubleshooting
 
 ### Error CORS
-- Verificar que Spring Boot está corriendo
-- Verificar configuración CORS en `SecurityConfig.java`
-- Restart Spring Boot
 
-### Cookie no se crea
-- Verificar logs: "Cookie de sesión creada exitosamente"
-- Verificar `SameSite=Strict` en `OAuth2LoginSuccessHandler`
-- Limpiar cookies del navegador
+**Síntoma:** `Access to XMLHttpRequest has been blocked by CORS policy`
 
-### 401 en peticiones
-- Verificar cookie en DevTools
-- Verificar `withCredentials: true` en Angular
-- Verificar CORS permite credentials
+**Solución:**
+- Verificar SecurityConfig.java CORS configuration
+- Verificar Keycloak Web Origins: `http://localhost:4200`
+
+### Token no se guarda en localStorage
+
+**Síntoma:** Después del login, no hay token en localStorage
+
+**Solución:**
+- Verificar redirect URI en Keycloak: `http://localhost:4200/*`
+- Verificar client authentication = OFF en Keycloak
+- Ver console logs de angular-oauth2-oidc
+
+### PKCE no funciona
+
+**Síntoma:** Error "PKCE verification failed"
+
+**Solución:**
+- Verificar en Keycloak → Client → Advanced Settings
+- **Proof Key for Code Exchange Code Challenge Method**: `S256`
+- Verificar `usePkce: true` en AuthConfig
+
+### 401 en todas las peticiones
+
+**Síntoma:** Backend devuelve 401 aunque hay token
+
+**Solución:**
+- Verificar que interceptor añade Authorization header
+- Verificar issuer-uri en application.yml
+- Ver logs de Spring Security
 
 ---
 
 ## 📖 Referencias
 
-- [Spring Security OAuth2](https://spring.io/guides/tutorials/spring-boot-oauth2/)
+- [OAuth 2.0 for Browser-Based Apps](https://datatracker.ietf.org/doc/html/draft-ietf-oauth-browser-based-apps)
+- [PKCE RFC 7636](https://datatracker.ietf.org/doc/html/rfc7636)
+- [angular-oauth2-oidc Documentation](https://github.com/manfredsteyer/angular-oauth2-oidc)
 - [Keycloak Documentation](https://www.keycloak.org/documentation)
-- [Angular Security Guide](https://angular.dev/best-practices/security)
-- [BFF Pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/backends-for-frontends)
+- [Spring Security OAuth2 Resource Server](https://docs.spring.io/spring-security/reference/servlet/oauth2/resource-server/index.html)
+
+---
+
+## 🎯 Siguiente Paso
+
+Según tus necesidades:
+
+### Si necesitas más seguridad:
+**Rama `oauth2-bff`** - Cookies HttpOnly, máxima protección
+
+```bash
+git checkout oauth2-bff
+```
+
+### Si necesitas M2M:
+**Rama `oauth2-resource-server`** - Client Credentials, Service Accounts
+
+```bash
+git checkout oauth2-resource-server
+```
+
+### Si quieres lo básico:
+**Rama `main`** - Resource Server educativo simple
+
+```bash
+git checkout main
+```
+
+---
+
+**¿Listo para implementar?** Sigue el [Inicio Rápido](#-inicio-rápido) 🚀
