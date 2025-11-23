@@ -1,133 +1,237 @@
 import { Injectable, signal } from '@angular/core';
-import { HttpClient } from '@angular/common/http';
-import { Observable, tap, BehaviorSubject } from 'rxjs';
-import { AuthStatus, User, LogoutResponse } from '../models/user.model';
+import { Router } from '@angular/router';
+import { OAuthService, AuthConfig } from 'angular-oauth2-oidc';
+import { BehaviorSubject, filter } from 'rxjs';
 
 /**
- * Servicio de autenticación para el patrón BFF.
+ * Servicio de autenticación para SPA con Authorization Code + PKCE.
  *
- * Este servicio gestiona toda la autenticación usando cookies HttpOnly:
- * - NO almacena JWT en localStorage/sessionStorage
- * - Todas las peticiones usan withCredentials para enviar cookies
- * - El backend (BFF) gestiona las cookies de forma segura
+ * Este servicio usa angular-oauth2-oidc para implementar el flujo
+ * Authorization Code con PKCE (Proof Key for Code Exchange).
  *
- * Características de seguridad:
- * - JWT nunca expuesto al JavaScript del frontend
- * - Cookies HttpOnly previenen XSS
- * - SameSite=Strict previene CSRF
+ * Diferencias con el patrón BFF:
+ * - El SPA gestiona DIRECTAMENTE la autenticación con Keycloak
+ * - JWT almacenado en localStorage (accesible desde JavaScript)
+ * - NO usa cookies HttpOnly (menos seguro que BFF)
+ * - PKCE protege contra ataques de interceptación del code
+ *
+ * Flujo de autenticación:
+ * 1. Usuario hace click en "Login"
+ * 2. SPA genera code_verifier y code_challenge (PKCE)
+ * 3. SPA redirige al usuario a Keycloak con code_challenge
+ * 4. Usuario se autentica en Keycloak
+ * 5. Keycloak redirige de vuelta con authorization code
+ * 6. SPA intercambia code + code_verifier por tokens
+ * 7. SPA almacena tokens en localStorage
+ * 8. SPA envía access_token en header Authorization
+ *
+ * Ventajas:
+ * - Más simple que BFF (no necesita backend para login)
+ * - Frontend tiene control total del flujo
+ * - CORS simplificado
+ *
+ * Desventajas:
+ * - Token accesible desde JavaScript (vulnerable a XSS)
+ * - Menos seguro que BFF con cookies HttpOnly
+ * - Refresh token debe manejarse con cuidado
  */
 @Injectable({
   providedIn: 'root'
 })
 export class AuthService {
-  private readonly API_URL = 'http://localhost:8081/api';
-
-  // Signal para reactive state del usuario
-  private authStatusSubject = new BehaviorSubject<AuthStatus>({ authenticated: false });
-  public authStatus$ = this.authStatusSubject.asObservable();
-
-  // Signal para facilitar uso en templates
+  // Signal para reactive state
   public isAuthenticated = signal<boolean>(false);
   public currentUser = signal<string | null>(null);
+  public userRoles = signal<string[]>([]);
 
-  constructor(private http: HttpClient) {
-    // Verificar estado de autenticación al iniciar
-    this.checkAuthStatus().subscribe({
-      next: (status) => this.updateAuthState(status),
-      error: () => this.updateAuthState({ authenticated: false })
-    });
+  // BehaviorSubject para compatibilidad con código existente
+  private authStatusSubject = new BehaviorSubject<boolean>(false);
+  public authStatus$ = this.authStatusSubject.asObservable();
+
+  constructor(
+    private oauthService: OAuthService,
+    private router: Router
+  ) {
+    this.configureOAuth();
+    this.setupAuthFlow();
   }
 
   /**
-   * Inicia el flujo de login OAuth2 con Keycloak.
+   * Configuración de OAuth2/OIDC para Keycloak.
    *
-   * IMPORTANTE: Este método NO usa HttpClient, sino window.location
-   * porque necesitamos una redirección completa del navegador a Keycloak.
+   * IMPORTANTE:
+   * - responseType: 'code' → Authorization Code Flow
+   * - usePkce: true → Habilita PKCE
+   * - showDebugInformation: true → Útil para desarrollo
+   */
+  private configureOAuth(): void {
+    const authConfig: AuthConfig = {
+      // URL base de Keycloak
+      issuer: 'http://localhost:9090/realms/mi-realm',
+
+      // Client ID (debe ser público en Keycloak)
+      clientId: 'spring-boot-client',
+
+      // URL de redirección después del login
+      redirectUri: window.location.origin,
+
+      // Usar Authorization Code Flow (no Implicit)
+      responseType: 'code',
+
+      // Scopes solicitados
+      scope: 'openid profile email',
+
+      // CRÍTICO: Habilitar PKCE para clientes públicos
+      usePkce: true,
+
+      // Mostrar logs en desarrollo
+      showDebugInformation: true,
+
+      // Validar el issuer del token
+      strictDiscoveryDocumentValidation: true,
+
+      // Refresh token automático
+      sessionChecksEnabled: false,
+    };
+
+    this.oauthService.configure(authConfig);
+  }
+
+  /**
+   * Configura el flujo de autenticación automático.
    *
-   * Flujo:
-   * 1. Redirige a /api/auth/login
-   * 2. Backend redirige a Keycloak
-   * 3. Usuario se autentica en Keycloak
-   * 4. Keycloak redirige de vuelta al backend
-   * 5. Backend crea cookie HttpOnly
-   * 6. Backend redirige a /dashboard en Angular
+   * Este método:
+   * 1. Carga la configuración de Discovery de Keycloak
+   * 2. Intenta hacer login automático si hay tokens guardados
+   * 3. Escucha eventos de autenticación
+   */
+  private setupAuthFlow(): void {
+    // Cargar configuración de Discovery desde Keycloak
+    this.oauthService.loadDiscoveryDocumentAndTryLogin().then(() => {
+      // Verificar si hay una sesión activa
+      if (this.oauthService.hasValidAccessToken()) {
+        this.updateAuthState(true);
+      }
+    });
+
+    // Escuchar eventos de tokens
+    this.oauthService.events
+      .pipe(filter((e) => e.type === 'token_received'))
+      .subscribe(() => {
+        this.updateAuthState(true);
+      });
+
+    this.oauthService.events
+      .pipe(filter((e) => e.type === 'logout'))
+      .subscribe(() => {
+        this.updateAuthState(false);
+      });
+  }
+
+  /**
+   * Inicia el flujo de login con Keycloak.
+   *
+   * Este método:
+   * 1. Genera code_verifier y code_challenge (PKCE)
+   * 2. Redirige al usuario a la página de login de Keycloak
+   * 3. Keycloak redirige de vuelta con el authorization code
+   * 4. angular-oauth2-oidc automáticamente intercambia el code por tokens
    */
   login(): void {
-    window.location.href = `${this.API_URL}/auth/login`;
+    this.oauthService.initCodeFlow();
   }
 
   /**
    * Cierra la sesión del usuario.
    *
-   * Esto invalida la cookie ACCESS_TOKEN en el backend.
-   *
-   * @returns Observable con la respuesta del logout
+   * Este método:
+   * 1. Revoca los tokens en Keycloak (opcional)
+   * 2. Limpia los tokens del localStorage
+   * 3. Redirige al usuario a la página de login
    */
-  logout(): Observable<LogoutResponse> {
-    return this.http.post<LogoutResponse>(`${this.API_URL}/auth/logout`, {}).pipe(
-      tap(() => {
-        this.updateAuthState({ authenticated: false });
-      })
-    );
+  logout(): void {
+    this.oauthService.logOut();
+    this.updateAuthState(false);
+    this.router.navigate(['/login']);
   }
 
   /**
-   * Verifica si hay una sesión activa.
+   * Obtiene el access token actual.
    *
-   * El backend verifica si hay una cookie válida.
-   *
-   * @returns Observable con el estado de autenticación
+   * @returns El access token o null si no hay sesión
    */
-  checkAuthStatus(): Observable<AuthStatus> {
-    return this.http.get<AuthStatus>(`${this.API_URL}/auth/status`).pipe(
-      tap(status => this.updateAuthState(status))
-    );
+  getAccessToken(): string | null {
+    return this.oauthService.getAccessToken();
   }
 
   /**
-   * Obtiene la información completa del usuario autenticado.
+   * Obtiene los claims del ID token.
    *
-   * @returns Observable con los datos del usuario
+   * El ID token contiene información del usuario:
+   * - preferred_username
+   * - email
+   * - name
+   * - realm_access.roles
+   *
+   * @returns Los claims del token o null
    */
-  getUserProfile(): Observable<User> {
-    return this.http.get<User>(`${this.API_URL}/user/me`);
+  getIdentityClaims(): any {
+    return this.oauthService.getIdentityClaims();
   }
 
   /**
    * Verifica si el usuario tiene un rol específico.
    *
-   * @param role El rol a verificar (ej: 'ROLE_ADMIN')
+   * Los roles están en el campo realm_access.roles del token.
+   *
+   * @param role El rol a verificar (ej: 'user', 'admin')
    * @returns true si el usuario tiene el rol
    */
-  hasRole(role: string): Observable<boolean> {
-    return new Observable(observer => {
-      this.checkAuthStatus().subscribe({
-        next: (status) => {
-          if (status.authenticated && status.authorities) {
-            const hasRole = status.authorities.some(auth => auth.authority === role);
-            observer.next(hasRole);
-          } else {
-            observer.next(false);
-          }
-          observer.complete();
-        },
-        error: () => {
-          observer.next(false);
-          observer.complete();
-        }
-      });
-    });
+  hasRole(role: string): boolean {
+    const claims: any = this.getIdentityClaims();
+    if (!claims || !claims.realm_access || !claims.realm_access.roles) {
+      return false;
+    }
+    return claims.realm_access.roles.includes(role);
+  }
+
+  /**
+   * Refresca el access token usando el refresh token.
+   *
+   * Útil cuando el access token expira pero el refresh token sigue válido.
+   *
+   * @returns Promise que resuelve cuando el token se ha refrescado
+   */
+  async refreshToken(): Promise<void> {
+    try {
+      await this.oauthService.refreshToken();
+      this.updateAuthState(true);
+    } catch (error) {
+      console.error('Error refrescando token:', error);
+      this.logout();
+    }
   }
 
   /**
    * Actualiza el estado de autenticación interno.
    *
-   * @param status Estado de autenticación del backend
+   * @param authenticated Estado de autenticación
    */
-  private updateAuthState(status: AuthStatus): void {
-    this.authStatusSubject.next(status);
-    this.isAuthenticated.set(status.authenticated);
-    this.currentUser.set(status.username || null);
+  private updateAuthState(authenticated: boolean): void {
+    this.authStatusSubject.next(authenticated);
+    this.isAuthenticated.set(authenticated);
+
+    if (authenticated) {
+      const claims: any = this.getIdentityClaims();
+      this.currentUser.set(claims?.preferred_username || null);
+
+      // Extraer roles
+      const roles = claims?.realm_access?.roles || [];
+      this.userRoles.set(roles);
+    } else {
+      this.currentUser.set(null);
+      this.userRoles.set([]);
+    }
   }
 
   /**
@@ -136,6 +240,6 @@ export class AuthService {
    * @returns true si el usuario está autenticado
    */
   get isAuthenticatedValue(): boolean {
-    return this.authStatusSubject.value.authenticated;
+    return this.oauthService.hasValidAccessToken();
   }
 }
