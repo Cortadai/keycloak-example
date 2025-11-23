@@ -1,110 +1,191 @@
-# Aprender Spring Boot con Keycloak
+# Spring Boot + Keycloak - Demo Básico
 
-Un proyecto completo para aprender a integrar **Spring Boot** con **Keycloak** para autenticación y autorización.
+**Demo educativo básico** de autenticación y autorización con Spring Boot y Keycloak.
 
+> ⚠️ **IMPORTANTE**: Esta es una implementación **básica con fines educativos**.
+> Para **producción**, usa la rama **[oauth2-authorization-code](../../tree/oauth2-authorization-code)** que implementa best practices:
+> - ✅ OAuth2 Authorization Code Flow
+> - ✅ Client secret en variables de entorno
+> - ✅ Configuración optimizada con `issuer-uri`
+> - ✅ Dual authentication (OAuth2 Login + Resource Server)
 
----
+## 📋 Descripción
 
-## 🎯 ¿Qué aprenderás?
+Este proyecto es una implementación educativa básica que demuestra:
 
-- ✅ **Autenticación moderna** con OAuth 2.0 y OpenID Connect
-- ✅ **Validación de tokens JWT** en Spring Boot
-- ✅ **Control de acceso basado en roles** (RBAC)
-- ✅ **Integración completa** Spring Security + Keycloak
-- ✅ **Mejores prácticas** de seguridad
-- ✅ **Ejemplos prácticos** con código comentado
+- Validación de tokens JWT con Keycloak
+- Control de acceso basado en roles (RBAC)
+- Endpoints públicos y protegidos
+- Configuración básica de Spring Security con Keycloak
 
-## 🚀 Inicio Rápido
+## 🚀 Quick Start
 
-### Montar un Keycloak con Docker
+### Prerrequisitos
 
-1. **Inicia Keycloak:**
-   ```bash
-   docker run -p 8080:8080 \
-     -e KEYCLOAK_ADMIN=admin \
-     -e KEYCLOAK_ADMIN_PASSWORD=admin \
-     quay.io/keycloak/keycloak:latest start-dev
-   ```
+- Java 17+
+- Maven 3.8+
+- Docker (para Keycloak)
 
-2. **Lee la guía:**
-   ```bash
-   EMPIEZA_AQUI.md
-   ```
+### 1. Iniciar Keycloak
 
-3. **Configura Keycloak:**
-   - Accede a http://localhost:8080
-   - Sigue `CONFIGURACION_KEYCLOAK.md`
-
-4. **Ejecuta la aplicación:**
-   ```bash
-   cd keycloak-spring-demo
-   ./mvnw spring-boot:run
-   ```
-
-5. **Prueba:**
-   ```bash
-   curl http://localhost:8081/public/hello
-   ```
-
-## 📚 Documentación
-
-### Guías de Aprendizaje
-
-| Documento | Descripción | Nivel |
-|-----------|-------------|-------|
-| [EMPIEZA_AQUI.md](EMPIEZA_AQUI.md) | 🎓 **Comienza aquí** - Ruta de aprendizaje | Principiante |
-| [GUIA_APRENDIZAJE.md](GUIA_APRENDIZAJE.md) | 📖 Conceptos básicos de Spring Boot + Keycloak | Principiante |
-| [CONFIGURACION_KEYCLOAK.md](CONFIGURACION_KEYCLOAK.md) | ⚙️ Configuración paso a paso de Keycloak | Principiante |
-| [EJEMPLOS_PRUEBA.md](EJEMPLOS_PRUEBA.md) | 🧪 Ejemplos prácticos con cURL y Postman | Intermedio |
-| [CONCEPTOS_AVANZADOS.md](CONCEPTOS_AVANZADOS.md) | 🚀 Temas avanzados y producción | Avanzado |
-
-
-## 🏗️ Arquitectura del Proyecto
-
+```bash
+docker run -p 8080:8080 \
+  -e KEYCLOAK_ADMIN=admin \
+  -e KEYCLOAK_ADMIN_PASSWORD=admin \
+  quay.io/keycloak/keycloak:23.0.0 start-dev
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      Cliente                            │
-│            (cURL / Postman / Browser)                   │
-└────────────────────┬────────────────────────────────────┘
-                     │
-         ┌───────────┼──────────────┐
-         │                          │
-         ▼                          ▼
-┌─────────────────┐      ┌─────────────────────┐
-│    Keycloak     │      │   Spring Boot App   │
-│   (Port 8080)   │◄────►│    (Port 8081)      │
-│                 │      │                     │
-│ • Autenticación │      │ • Endpoints REST    │
-│ • Gestión Users │      │ • Validación JWT    │
-│ • Genera Tokens │      │ • RBAC (Roles)      │
-└─────────────────┘      └─────────────────────┘
+
+Accede a: http://localhost:8080
+- Usuario: `admin`
+- Contraseña: `admin`
+
+### 2. Configurar Keycloak
+
+Ver guía detallada en **[SETUP.md](SETUP.md)**
+
+Pasos básicos:
+1. Crear realm `mi-realm`
+2. Crear client `spring-boot-client`
+3. Crear roles `USER` y `ADMIN`
+4. Crear usuarios de prueba
+
+### 3. Configurar la Aplicación
+
+Edita `src/main/resources/application.yml` y reemplaza:
+
+```yaml
+client-secret: tu-client-secret-aqui  # ← Pega tu client secret aquí
 ```
+
+**⚠️ NOTA**: Este método NO es recomendado para producción. Ver rama `oauth2-authorization-code` para implementación correcta con variables de entorno.
+
+### 4. Ejecutar
+
+```bash
+./mvnw spring-boot:run
+```
+
+La aplicación estará en: http://localhost:8081
+
+### 5. Probar
+
+**Endpoint público:**
+```bash
+curl http://localhost:8081/public/hello
+```
+
+**Obtener token y probar endpoint protegido:**
+
+Ver ejemplos completos en **[USAGE.md](USAGE.md)**
 
 ## 📁 Estructura del Proyecto
 
 ```
-keycloak/
-└── 📦 keycloak-spring-demo/         ← Proyecto Spring Boot
-    ├── src/
-    │   └── main/
-    │       ├── java/com/example/keycloak/
-    │       │   ├── config/
-    │       │   │   └── SecurityConfig.java        # ⭐ Configuración de seguridad
-    │       │   ├── controller/
-    │       │   │   ├── PublicController.java      # 🌐 Endpoints públicos
-    │       │   │   ├── UserController.java        # 👤 Endpoints de usuario
-    │       │   │   └── AdminController.java       # 🔐 Endpoints de admin
-    │       │   └── model/
-    │       │       └── UserInfo.java
-    │       └── resources/
-    │           └── application.yml                # ⚙️  Configuración
-    ├─── pom.xml                                    # 📦 Dependencias
-    ├── 📄 README.md                     ← Estás aquí
-    ├── 🎓 EMPIEZA_AQUI.md               ← Lee esto primero
-    ├── 📖 GUIA_APRENDIZAJE.md           ← Conceptos básicos
-    ├── ⚙️  CONFIGURACION_KEYCLOAK.md    ← Setup de Keycloak
-    ├── 🧪 EJEMPLOS_PRUEBA.md            ← Ejemplos prácticos
-    ├── 🚀 CONCEPTOS_AVANZADOS.md        ← Temas avanzados
+keycloak-spring-demo/
+├── src/main/java/com/example/keycloak/
+│   ├── config/
+│   │   └── SecurityConfig.java       # Configuración de seguridad
+│   ├── controller/
+│   │   ├── PublicController.java     # Endpoints públicos
+│   │   ├── UserController.java       # Endpoints USER
+│   │   └── AdminController.java      # Endpoints ADMIN
+│   └── model/
+│       └── UserInfo.java
+├── src/main/resources/
+│   └── application.yml               # ⚠️ Client secret hardcodeado
+├── README.md                         # Este archivo
+├── SETUP.md                          # Guía de configuración
+└── USAGE.md                          # Ejemplos de uso
 ```
 
+## 🧪 Testing
 
+### Usuarios de Prueba
+
+| Usuario | Contraseña | Roles |
+|---------|------------|-------|
+| usuario1 | password123 | USER |
+| admin1 | admin123 | USER, ADMIN |
+
+### Endpoints Disponibles
+
+**Públicos:**
+- `GET /public/hello`
+- `GET /public/info`
+
+**Protegidos (ROLE_USER):**
+- `GET /api/user/me`
+- `GET /api/user/dashboard`
+- `GET /api/user/profile`
+
+**Protegidos (ROLE_ADMIN):**
+- `GET /api/admin/dashboard`
+- `GET /api/admin/users`
+
+## 📚 Documentación
+
+- **[SETUP.md](SETUP.md)** - Configuración de Keycloak y la aplicación
+- **[USAGE.md](USAGE.md)** - Ejemplos de uso con cURL y Postman
+
+## ⚠️ Limitaciones de esta Implementación
+
+Esta implementación básica tiene las siguientes limitaciones:
+
+1. **Client secret hardcodeado** en `application.yml` ❌
+   - Riesgo: Se puede commitear accidentalmente al repositorio
+   - Solución: Ver rama `oauth2-authorization-code`
+
+2. **Configuración verbose** ❌
+   - Define todos los endpoints manualmente
+   - Solución: Usar solo `issuer-uri` (ver rama `oauth2-authorization-code`)
+
+3. **No implementa OAuth2 Login** ❌
+   - Solo Resource Server (Bearer tokens)
+   - No soporta login desde navegador
+   - Solución: Ver rama `oauth2-authorization-code`
+
+4. **Solo Resource Owner Password Grant** ❌
+   - Flujo deprecado, no recomendado para producción
+   - Solución: Ver rama `oauth2-authorization-code` que implementa Authorization Code Flow
+
+## 🚀 Migrar a Producción
+
+Para llevar este proyecto a producción:
+
+1. **Cambia a la rama recomendada:**
+   ```bash
+   git checkout oauth2-authorization-code
+   ```
+
+2. **Revisa las mejoras:**
+   - OAuth2 Authorization Code Flow
+   - Client secret en variables de entorno
+   - Configuración simplificada
+   - Dual authentication (OAuth2 Login + Resource Server)
+   - Documentación completa
+
+## 🛠️ Tecnologías
+
+- **Spring Boot 3.2.0**
+- **Spring Security 6.2.0**
+- **Keycloak 23.0.0**
+- **JWT**
+- **OAuth2/OIDC**
+
+## 🎯 Uso Recomendado
+
+**Esta rama (main):**
+- ✅ Aprendizaje inicial de Keycloak
+- ✅ Entender conceptos básicos
+- ✅ Experimentación rápida
+- ❌ NO para producción
+
+**Rama oauth2-authorization-code:**
+- ✅ Implementación production-ready
+- ✅ Best practices de OAuth2
+- ✅ Seguridad mejorada
+- ✅ Para aplicaciones reales
+
+---
+
+**¿Listo para producción?** → Revisa la rama **[oauth2-authorization-code](../../tree/oauth2-authorization-code)** 🚀
