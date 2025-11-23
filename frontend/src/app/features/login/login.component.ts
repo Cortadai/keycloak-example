@@ -1,4 +1,5 @@
-import { Component } from '@angular/core';
+import { Component, OnInit } from '@angular/core';
+import { Router } from '@angular/router';
 import { AuthService } from '../../core/services/auth.service';
 
 /**
@@ -7,7 +8,7 @@ import { AuthService } from '../../core/services/auth.service';
  * Pantalla simple con un botón para iniciar el flujo OAuth2 con Keycloak.
  *
  * No hay formularios de login porque la autenticación se hace
- * completamente en Keycloak (patrón BFF).
+ * completamente en Keycloak (patrón SPA + PKCE).
  */
 @Component({
   selector: 'app-login',
@@ -23,7 +24,7 @@ import { AuthService } from '../../core/services/auth.service';
         </div>
 
         <h1>Keycloak Spring Demo</h1>
-        <p class="subtitle">Patrón BFF con Cookies HttpOnly</p>
+        <p class="subtitle">Patrón SPA con PKCE</p>
 
         <button class="login-button" (click)="login()">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -36,7 +37,7 @@ import { AuthService } from '../../core/services/auth.service';
 
         <div class="info">
           <p>Al hacer click, serás redirigido a Keycloak para autenticarte de forma segura.</p>
-          <p class="security-note">🔒 Tu token JWT nunca es expuesto al JavaScript. Se almacena de forma segura en cookies HttpOnly.</p>
+          <p class="security-note">🔒 Autenticación segura con PKCE (Proof Key for Code Exchange).</p>
         </div>
       </div>
     </div>
@@ -141,16 +142,30 @@ import { AuthService } from '../../core/services/auth.service';
     }
   `]
 })
-export class LoginComponent {
-  constructor(private authService: AuthService) {}
+export class LoginComponent implements OnInit {
+  constructor(
+    private authService: AuthService,
+    private router: Router
+  ) {}
+
+  ngOnInit(): void {
+    console.log('[LoginComponent] ngOnInit - Verificando autenticación...');
+    // Si el usuario ya está autenticado, redirigir al dashboard
+    const isAuth = this.authService.isAuthenticatedValue;
+    console.log('[LoginComponent] ¿Usuario autenticado?', isAuth);
+    if (isAuth) {
+      console.log('[LoginComponent] Usuario ya autenticado, redirigiendo al dashboard...');
+      this.router.navigate(['/dashboard']);
+    }
+  }
 
   /**
    * Inicia el flujo de login con Keycloak.
    *
-   * Esto redirige al usuario a /api/auth/login,
-   * que a su vez redirige a Keycloak.
+   * Esto inicia el Authorization Code Flow con PKCE.
    */
   login(): void {
+    console.log('[LoginComponent] Botón de login clickeado');
     this.authService.login();
   }
 }

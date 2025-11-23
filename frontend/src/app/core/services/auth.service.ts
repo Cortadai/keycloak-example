@@ -77,8 +77,11 @@ export class AuthService {
       // Client ID (debe ser público en Keycloak)
       clientId: 'spring-boot-angular',
 
-      // URL de redirección después del login
-      redirectUri: window.location.origin,
+      // URL de redirección después del login (debe coincidir EXACTAMENTE con Keycloak)
+      redirectUri: window.location.origin + '/login',
+
+      // URL para redirigir después del logout
+      postLogoutRedirectUri: window.location.origin + '/login',
 
       // Usar Authorization Code Flow (no Implicit)
       responseType: 'code',
@@ -90,16 +93,25 @@ export class AuthService {
       showDebugInformation: true,
 
       // Validar el issuer del token
-      strictDiscoveryDocumentValidation: true,
+      strictDiscoveryDocumentValidation: false,
 
       // Refresh token automático
       sessionChecksEnabled: false,
 
+      // IMPORTANTE: Deshabilitar HTTPS en desarrollo
+      requireHttps: false,
+
       // PKCE se habilita automáticamente para clientes públicos
-      // (cuando no hay requireHttps o oidc = true)
       oidc: true,
+
+      // Usar hash fragment para el callback (en lugar de query params)
+      // Esto ayuda en algunas configuraciones de routing
+      // responseType: 'code',
+      // No cambiar esto por ahora, primero probar con query params
     };
 
+    console.log('[AuthService] Configuración OAuth:', authConfig);
+    console.log('[AuthService] Redirect URI configurada:', authConfig.redirectUri);
     this.oauthService.configure(authConfig);
   }
 
@@ -110,26 +122,59 @@ export class AuthService {
    * 1. Carga la configuración de Discovery de Keycloak
    * 2. Intenta hacer login automático si hay tokens guardados
    * 3. Escucha eventos de autenticación
+   * 4. Redirige al dashboard después del login exitoso
    */
   private setupAuthFlow(): void {
+    console.log('[AuthService] Iniciando configuración del flujo OAuth...');
+    console.log('[AuthService] URL actual:', this.router.url);
+
+    // Escuchar TODOS los eventos de OAuth para debugging
+    this.oauthService.events.subscribe((event) => {
+      console.log('[AuthService] OAuth Event:', event);
+    });
+
     // Cargar configuración de Discovery desde Keycloak
     this.oauthService.loadDiscoveryDocumentAndTryLogin().then(() => {
+      console.log('[AuthService] Discovery document cargado y tryLogin completado');
+
       // Verificar si hay una sesión activa
-      if (this.oauthService.hasValidAccessToken()) {
+      const hasValidToken = this.oauthService.hasValidAccessToken();
+      console.log('[AuthService] ¿Tiene token válido?', hasValidToken);
+
+      if (hasValidToken) {
+        console.log('[AuthService] Token válido encontrado, actualizando estado...');
         this.updateAuthState(true);
+
+        // Si estamos en la página de login y ya estamos autenticados, redirigir al dashboard
+        if (this.router.url === '/login' || this.router.url === '/') {
+          console.log('[AuthService] Redirigiendo al dashboard...');
+          this.router.navigate(['/dashboard']);
+        }
+      } else {
+        console.log('[AuthService] No hay token válido');
       }
+    }).catch((error) => {
+      console.error('[AuthService] Error loading discovery document:', error);
     });
 
     // Escuchar eventos de tokens
     this.oauthService.events
       .pipe(filter((e) => e.type === 'token_received'))
       .subscribe(() => {
+        console.log('[AuthService] ¡Token recibido! Actualizando estado y redirigiendo...');
         this.updateAuthState(true);
+
+        // Redirigir al dashboard después de recibir el token
+        if (this.router.url === '/login' || this.router.url === '/' || this.router.url.includes('code=')) {
+          console.log('[AuthService] Redirigiendo al dashboard desde evento token_received...');
+          this.router.navigate(['/dashboard']);
+        }
       });
 
     this.oauthService.events
       .pipe(filter((e) => e.type === 'logout'))
       .subscribe(() => {
+        console.log('[AuthService] Evento de logout recibido');
         this.updateAuthState(false);
       });
   }
@@ -144,6 +189,7 @@ export class AuthService {
    * 4. angular-oauth2-oidc automáticamente intercambia el code por tokens
    */
   login(): void {
+    console.log('[AuthService] Iniciando flujo de login (initCodeFlow)...');
     this.oauthService.initCodeFlow();
   }
 
@@ -230,19 +276,23 @@ export class AuthService {
    * @param authenticated Estado de autenticación
    */
   private updateAuthState(authenticated: boolean): void {
+    console.log('[AuthService] Actualizando estado de autenticación:', authenticated);
     this.authStatusSubject.next(authenticated);
     this.isAuthenticated.set(authenticated);
 
     if (authenticated) {
       const claims: any = this.getIdentityClaims();
+      console.log('[AuthService] Claims del usuario:', claims);
       this.currentUser.set(claims?.preferred_username || null);
 
       // Extraer roles
       const roles = claims?.realm_access?.roles || [];
       this.userRoles.set(roles);
+      console.log('[AuthService] Usuario:', claims?.preferred_username, 'Roles:', roles);
     } else {
       this.currentUser.set(null);
       this.userRoles.set([]);
+      console.log('[AuthService] Usuario desautenticado');
     }
   }
 

@@ -2,7 +2,7 @@ import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
 import { catchError, throwError } from 'rxjs';
-import { AuthService } from '../services/auth.service';
+import { OAuthService } from 'angular-oauth2-oidc';
 
 /**
  * Interceptor HTTP para SPA con Authorization Code + PKCE.
@@ -21,13 +21,15 @@ import { AuthService } from '../services/auth.service';
  * - El token se obtiene de OAuthService (angular-oauth2-oidc)
  * - Se añade automáticamente a todas las peticiones al backend
  * - Si el token expira (401), se puede refrescar automáticamente
+ * - NO inyectamos AuthService para evitar dependencia circular
+ *   (AuthService → HttpClient → authInterceptor → AuthService)
  */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
-  const authService = inject(AuthService);
+  const oauthService = inject(OAuthService);
   const router = inject(Router);
 
-  // Obtener el access token actual
-  const token = authService.getAccessToken();
+  // Obtener el access token actual directamente de OAuthService
+  const token = oauthService.getAccessToken();
 
   // Si hay token, añadirlo al header Authorization
   if (token) {
@@ -45,16 +47,18 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
         // 401 Unauthorized: Token inválido o expirado
 
         // Opción 1: Intentar refrescar el token automáticamente
-        // authService.refreshToken().then(() => {
+        // oauthService.refreshToken().then(() => {
         //   // Reintentar la petición con el nuevo token
         // }).catch(() => {
         //   // Si falla el refresh, hacer logout
-        //   authService.logout();
+        //   oauthService.logOut();
+        //   router.navigate(['/login']);
         // });
 
         // Opción 2 (simple): Hacer logout directamente
         console.warn('Token expirado o inválido (401), redirigiendo a login');
-        authService.logout();
+        oauthService.logOut();
+        router.navigate(['/login']);
 
       } else if (error.status === 403) {
         // 403 Forbidden: Usuario autenticado pero sin permisos
