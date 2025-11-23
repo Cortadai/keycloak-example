@@ -1,6 +1,5 @@
 package com.example.keycloak.config;
 
-import com.example.keycloak.filter.JwtCookieFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -12,7 +11,6 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -25,108 +23,105 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Configuración de seguridad para la aplicación con patrón BFF.
+ * ============================================================================
+ * Configuración de Seguridad para SPA con Authorization Code + PKCE
+ * ============================================================================
  *
- * Esta clase configura cómo Spring Security debe proteger los endpoints
- * y cómo debe validar los tokens JWT que vienen de Keycloak.
+ * Esta configuración implementa un Resource Server que valida tokens JWT
+ * provenientes de un SPA (Angular/React/Vue) que usa Authorization Code Flow + PKCE.
  *
- * Características BFF implementadas:
- * - OAuth2 Login con cookies HttpOnly
- * - CORS para Angular (localhost:4200)
- * - Sesiones STATEFUL para cookies
- * - JwtCookieFilter para extraer JWT de cookies
- * - Soporte dual: cookies (BFF) y headers (API)
+ * ¿Qué hace esta configuración?
+ * 1. Valida tokens JWT que vienen en el header Authorization
+ * 2. Extrae roles del token (realm_access.roles y resource_access)
+ * 3. Protege endpoints según roles (USER, ADMIN)
+ * 4. Permite CORS para el SPA
+ *
+ * ¿Qué NO hace?
+ * - NO gestiona el login (el SPA lo hace directamente con Keycloak)
+ * - NO crea sesiones HTTP (STATELESS)
+ * - NO usa cookies (el JWT está en localStorage del SPA)
+ * - NO implementa BFF (el token es accesible desde JavaScript)
+ *
+ * Diferencias con otras ramas:
+ * - main: Resource Server básico educativo
+ * - oauth2-resource-server: M2M con Client Credentials
+ * - oauth2-bff: BFF con cookies HttpOnly (más seguro)
+ * - oauth2-spa-pkce (esta rama): SPA tradicional con PKCE
  *
  * @Configuration - Indica que esta clase contiene configuración de Spring
  * @EnableWebSecurity - Habilita la seguridad web de Spring Security
- * @EnableMethodSecurity - Permite usar anotaciones de seguridad en métodos (@PreAuthorize, etc.)
+ * @EnableMethodSecurity - Permite usar @PreAuthorize en los métodos
  */
 @Configuration
 @EnableWebSecurity
 @EnableMethodSecurity(prePostEnabled = true)
 public class SecurityConfig {
 
-    private final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler;
-    private final JwtCookieFilter jwtCookieFilter;
-
-    public SecurityConfig(OAuth2LoginSuccessHandler oauth2LoginSuccessHandler,
-                          JwtCookieFilter jwtCookieFilter) {
-        this.oauth2LoginSuccessHandler = oauth2LoginSuccessHandler;
-        this.jwtCookieFilter = jwtCookieFilter;
-    }
-
     /**
-     * Configuración principal de seguridad para el patrón BFF.
+     * Configuración principal de seguridad para SPA.
      *
-     * SecurityFilterChain define las reglas de seguridad para las peticiones HTTP.
-     *
-     * @param http El objeto HttpSecurity para configurar la seguridad
-     * @return La cadena de filtros de seguridad configurada
-     * @throws Exception Si hay algún error en la configuración
+     * Define:
+     * 1. Qué endpoints son públicos y cuáles requieren autenticación
+     * 2. Qué roles se necesitan para cada endpoint
+     * 3. Cómo validar tokens JWT
+     * 4. CORS para permitir peticiones desde el SPA
      */
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-            // CORS: Permitir peticiones desde Angular
+            // CORS: Permitir peticiones desde el SPA (Angular en localhost:4200)
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
 
-            // Configuración de autorización de peticiones
+            // 1. CONFIGURACIÓN DE AUTORIZACIÓN
+            // Define quién puede acceder a qué endpoints
             .authorizeHttpRequests(auth -> auth
-                // Permitir acceso público a estos endpoints (sin autenticación)
+                // Endpoints PÚBLICOS (sin token)
                 .requestMatchers("/public/**").permitAll()
                 .requestMatchers("/", "/error").permitAll()
 
-                // Permitir endpoints de autenticación BFF sin autenticación previa
-                .requestMatchers("/api/auth/login", "/api/auth/status").permitAll()
-                .requestMatchers("/oauth2/**", "/login/**").permitAll()
-
-                // Endpoints que requieren el rol USER
+                // Endpoints que requieren rol USER
+                // El usuario debe tener "user" en realm_access.roles de Keycloak
                 .requestMatchers("/api/user/**").hasRole("USER")
 
-                // Endpoints que requieren el rol ADMIN
+                // Endpoints que requieren rol ADMIN
+                // El usuario debe tener "admin" en realm_access.roles de Keycloak
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
 
-                // Cualquier otra petición requiere autenticación
+                // Cualquier otro endpoint requiere estar autenticado
                 .anyRequest().authenticated()
             )
 
-            // Configuración de OAuth2 Login (para aplicaciones web con UI)
-            .oauth2Login(oauth2 -> oauth2
-                // Handler personalizado que crea la cookie HttpOnly
-                .successHandler(oauth2LoginSuccessHandler)
-            )
-
-            // Configuración de Resource Server (para validar tokens JWT)
+            // 2. CONFIGURACIÓN DE RESOURCE SERVER
+            // Valida tokens JWT que vienen en: Authorization: Bearer {token}
             .oauth2ResourceServer(oauth2 -> oauth2
                 .jwt(jwt -> jwt
-                    // Usar nuestro convertidor personalizado para extraer roles
+                    // Usar nuestro convertidor personalizado para extraer roles de Keycloak
                     .jwtAuthenticationConverter(jwtAuthenticationConverter())
                 )
             )
 
-            // Configuración de sesiones
-            // STATEFUL = Crear sesiones HTTP para cookies (patrón BFF)
+            // 3. CONFIGURACIÓN DE SESIONES
+            // STATELESS = No crear sesiones HTTP
+            // El SPA debe incluir el token JWT en cada petición
             .sessionManagement(session -> session
-                .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             )
 
-            // Añadir filtro personalizado para extraer JWT de cookies
-            .addFilterBefore(jwtCookieFilter, UsernamePasswordAuthenticationFilter.class)
-
-            // Deshabilitar CSRF temporalmente para desarrollo
-            // TODO: Habilitar en producción con configuración adecuada
+            // 4. DESHABILITAR CSRF
+            // Para APIs REST sin formularios HTML, CSRF no es necesario
+            // El SPA gestiona la autenticación con PKCE
             .csrf(csrf -> csrf.disable());
 
         return http.build();
     }
 
     /**
-     * Configuración de CORS para permitir peticiones desde Angular.
+     * Configuración de CORS para permitir peticiones desde el SPA.
      *
-     * IMPORTANTE para el patrón BFF:
-     * - allowCredentials(true) es CRÍTICO para enviar cookies
-     * - allowedOrigins debe ser específico (no "*")
-     * - En producción, usar el dominio real de Angular
+     * IMPORTANTE para SPAs:
+     * - allowCredentials NO es necesario (no usamos cookies)
+     * - allowedOrigins puede ser específico del SPA
+     * - En producción, usar el dominio real del SPA
      *
      * @return Configuración de CORS
      */
@@ -134,8 +129,7 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Permitir peticiones desde Angular (localhost:4200 en desarrollo)
-        // También permitir null para testing local con archivos HTML
+        // Permitir peticiones desde el SPA (localhost:4200 en desarrollo)
         configuration.setAllowedOriginPatterns(Arrays.asList(
                 "http://localhost:*",    // Cualquier puerto localhost
                 "http://127.0.0.1:*"     // También 127.0.0.1
@@ -156,54 +150,49 @@ public class SecurityConfig {
 
         // Headers que el navegador puede leer
         configuration.setExposedHeaders(Arrays.asList(
-                "Set-Cookie"
+                "Authorization"
         ));
 
-        // CRÍTICO: Permite el envío de cookies
-        configuration.setAllowCredentials(true);
+        // NO necesitamos credentials (no usamos cookies)
+        configuration.setAllowCredentials(false);
 
         // Tiempo de cache de la configuración CORS (1 hora)
         configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/api/**", configuration);
-        source.registerCorsConfiguration("/oauth2/**", configuration);
-        source.registerCorsConfiguration("/login/**", configuration);
+        source.registerCorsConfiguration("/public/**", configuration);
 
         return source;
     }
 
     /**
-     * Convertidor de JWT a Authentication.
+     * Convertidor que extrae roles del token JWT.
      *
-     * Este método extrae los roles del token JWT y los convierte en
-     * autoridades (GrantedAuthority) que Spring Security puede entender.
+     * ¿Por qué es necesario?
+     * - Keycloak guarda roles en "realm_access.roles" y "resource_access"
+     * - Spring Security los busca en "scope" por defecto
+     * - Este convertidor le dice a Spring dónde buscar los roles
      *
-     * Los tokens de Keycloak vienen con los roles en dos lugares:
-     * 1. realm_access.roles - Roles del realm
-     * 2. resource_access.{client-id}.roles - Roles específicos del cliente
-     *
-     * @return El convertidor configurado
+     * Convierte:
+     * - "user" (en Keycloak) → "ROLE_USER" (en Spring Security)
+     * - "admin" (en Keycloak) → "ROLE_ADMIN" (en Spring Security)
      */
     private JwtAuthenticationConverter jwtAuthenticationConverter() {
-        // Convertidor por defecto que extrae scopes del token
+        // Convertidor por defecto (extrae scopes)
         JwtGrantedAuthoritiesConverter grantedAuthoritiesConverter = new JwtGrantedAuthoritiesConverter();
 
         // Crear el convertidor principal
         JwtAuthenticationConverter jwtAuthenticationConverter = new JwtAuthenticationConverter();
 
-        // Establecer cómo extraer las autoridades (roles)
+        // Configurar cómo extraer las autoridades (roles)
         jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(jwt -> {
-            // Extraer roles del realm
+            // Extraer roles de diferentes lugares del token
             Collection<GrantedAuthority> realmRoles = extractRealmRoles(jwt.getClaims());
-
-            // Extraer roles del cliente
             Collection<GrantedAuthority> clientRoles = extractClientRoles(jwt.getClaims());
-
-            // Extraer scopes (usando el convertidor por defecto)
             Collection<GrantedAuthority> scopes = grantedAuthoritiesConverter.convert(jwt);
 
-            // Combinar todos los roles y scopes
+            // Combinar todos en una sola lista
             return Stream.of(realmRoles, clientRoles, scopes)
                     .flatMap(Collection::stream)
                     .collect(Collectors.toSet());
@@ -213,57 +202,68 @@ public class SecurityConfig {
     }
 
     /**
-     * Extrae los roles del realm desde el token JWT.
+     * Extrae roles del realm desde el token JWT.
      *
-     * En el token, los roles del realm están en:
+     * Busca en: token["realm_access"]["roles"]
+     *
+     * Ejemplo de token:
      * {
      *   "realm_access": {
-     *     "roles": ["role1", "role2"]
+     *     "roles": ["user", "admin"]
      *   }
      * }
      *
-     * @param claims Los claims del token JWT
-     * @return Lista de autoridades con prefijo ROLE_
+     * Resultado: ["ROLE_USER", "ROLE_ADMIN"]
      */
     @SuppressWarnings("unchecked")
     private Collection<GrantedAuthority> extractRealmRoles(Map<String, Object> claims) {
+        // Obtener realm_access del token
         Map<String, Object> realmAccess = (Map<String, Object>) claims.get("realm_access");
 
+        // Si no existe o no tiene roles, retornar lista vacía
         if (realmAccess == null || realmAccess.get("roles") == null) {
             return List.of();
         }
 
+        // Obtener la lista de roles
         List<String> roles = (List<String>) realmAccess.get("roles");
 
+        // Convertir cada rol a GrantedAuthority con prefijo ROLE_
+        // "user" → "ROLE_USER"
+        // "admin" → "ROLE_ADMIN"
         return roles.stream()
                 .map(role -> new SimpleGrantedAuthority("ROLE_" + role.toUpperCase()))
                 .collect(Collectors.toList());
     }
 
     /**
-     * Extrae los roles del cliente desde el token JWT.
+     * Extrae roles del cliente desde el token JWT.
      *
-     * En el token, los roles del cliente están en:
+     * Busca en: token["resource_access"]["{client-id}"]["roles"]
+     *
+     * Ejemplo de token:
      * {
      *   "resource_access": {
      *     "spring-boot-client": {
-     *       "roles": ["role1", "role2"]
+     *       "roles": ["manager"]
      *     }
      *   }
      * }
      *
-     * @param claims Los claims del token JWT
-     * @return Lista de autoridades con prefijo ROLE_
+     * Resultado: ["ROLE_MANAGER"]
      */
     @SuppressWarnings("unchecked")
     private Collection<GrantedAuthority> extractClientRoles(Map<String, Object> claims) {
+        // Obtener resource_access del token
         Map<String, Object> resourceAccess = (Map<String, Object>) claims.get("resource_access");
 
+        // Si no existe, retornar lista vacía
         if (resourceAccess == null) {
             return List.of();
         }
 
-        // Extraer roles de todos los clientes
+        // Extraer roles de TODOS los clientes
+        // (en caso de que el token tenga roles de múltiples clientes)
         return resourceAccess.values().stream()
                 .filter(Map.class::isInstance)
                 .map(client -> (Map<String, Object>) client)

@@ -1,86 +1,73 @@
-# Configuración de la aplicación Spring Boot con Keycloak
-# Patrón BFF (Backend for Frontend) con cookies HttpOnly
+# ============================================================================
+# Configuración de Spring Boot para SPA con Authorization Code + PKCE
+# ============================================================================
+#
+# Esta configuración implementa un Resource Server que valida tokens JWT
+# provenientes de un SPA (Angular/React/Vue) que usa Authorization Code + PKCE.
+#
+# ¿Qué hace esta configuración?
+# - Valida tokens JWT que vienen en el header Authorization
+# - Extrae roles del token para control de acceso
+# - NO gestiona el login (el SPA lo hace directamente con Keycloak)
+#
+# Diferencias con otras ramas:
+# - main: Resource Server básico educativo
+# - oauth2-resource-server: M2M con Client Credentials
+# - oauth2-bff: BFF con cookies HttpOnly (más seguro)
+# - oauth2-spa-pkce (esta rama): SPA tradicional con PKCE
+# ============================================================================
 
 server:
   port: 8081  # Puerto diferente al de Keycloak (que usa 9090)
 
-  # Configuración de cookies de sesión para patrón BFF
-  servlet:
-    session:
-      cookie:
-        # HttpOnly: JavaScript no puede acceder (protección XSS)
-        http-only: true
-        # Secure: solo HTTPS (false en desarrollo, true en producción)
-        secure: false
-        # SameSite: protección CSRF
-        same-site: strict
-        # Path: disponible en toda la aplicación
-        path: /
-        # MaxAge: -1 significa sesión del navegador (hasta que se cierre)
-        max-age: -1
-
 spring:
   application:
-    name: keycloak-spring-demo
+    name: keycloak-spring-demo-spa
 
-  # Configuración de OAuth2 Client (para login)
   security:
     oauth2:
-      client:
-        registration:
-          keycloak:
-            # ID del client que crearás en Keycloak
-            client-id: spring-boot-client
-            # Secret del client (confidential client)
-            client-secret: secreto-de-prueba  # Cambiar por secret verdadero
-            # Tipo de autorización
-            authorization-grant-type: authorization_code
-            # A dónde redirigir después del login
-            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
-            # Scopes que solicitamos
-            scope:
-              - openid
-              - profile
-              - email
-        provider:
-          keycloak:
-            # URL base de tu Keycloak
-            issuer-uri: http://localhost:9090/realms/mi-realm
-            # Endpoint de autorización
-            authorization-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/auth
-            # Endpoint para obtener tokens
-            token-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/token
-            # Endpoint de información del usuario
-            user-info-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/userinfo
-            # Endpoint para obtener la configuración JWKS (claves públicas)
-            jwk-set-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/certs
-            # Campo que contiene el nombre de usuario
-            user-name-attribute: preferred_username
-
-      # Configuración de Resource Server (para validar tokens)
+      # Configuración de Resource Server
+      # Solo necesitamos validar tokens JWT que vienen del SPA
       resourceserver:
         jwt:
-          # URL para obtener las claves públicas que validan los JWT
-          jwk-set-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/certs
-          # Issuer esperado en los tokens
+          # issuer-uri: Spring obtiene AUTOMÁTICAMENTE toda la configuración
+          # (jwk-set-uri, issuer, etc.) desde el endpoint de OpenID Connect
           issuer-uri: http://localhost:9090/realms/mi-realm
 
-# Configuración personalizada para la aplicación BFF
+# Configuración personalizada para la aplicación SPA
 app:
-  # URL del frontend Angular (para redirecciones)
+  # URL del frontend SPA (para CORS y redirecciones)
   frontend:
     url: http://localhost:4200
-
-  # Configuración de cookies de acceso
-  cookie:
-    # Secure: false en desarrollo, true en producción
-    secure: false
-    # Tiempo de vida de la cookie en segundos (1 hora = 3600)
-    max-age: 3600
 
 # Configuración de logging para ver qué está pasando
 logging:
   level:
-    org.springframework.security: DEBUG
+    org.springframework.security: INFO
     org.springframework.security.oauth2: DEBUG
     com.example.keycloak: DEBUG
+
+---
+# Perfil de desarrollo local
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+    com.example.keycloak: DEBUG
+
+---
+# Perfil de producción (ejemplo)
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+logging:
+  level:
+    org.springframework.security: INFO
+    org.springframework.security.oauth2: WARN
+    com.example.keycloak: INFO

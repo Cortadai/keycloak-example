@@ -1,35 +1,31 @@
 package com.example.keycloak.controller;
 
-import jakarta.servlet.http.Cookie;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.client.registration.ClientRegistration;
-import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
-import org.springframework.security.web.authentication.logout.SecurityContextLogoutHandler;
 import org.springframework.web.bind.annotation.*;
 
-import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Controlador para gestionar la autenticación en el patrón BFF.
+ * Controlador para gestionar la autenticación en SPA con PKCE.
  *
- * Este controlador proporciona los endpoints necesarios para que
- * Angular gestione la autenticación sin exponer el JWT:
+ * A diferencia del patrón BFF, en SPA+PKCE:
+ * - El frontend gestiona el flujo de autenticación directamente con Keycloak
+ * - El backend SOLO valida tokens JWT que vienen en el header Authorization
+ * - NO hay endpoints de login/logout/callback (el SPA los gestiona)
  *
- * - /api/auth/login  → Inicia el flujo OAuth2 con Keycloak
- * - /api/auth/logout → Cierra sesión e invalida la cookie
- * - /api/auth/status → Verifica si hay una sesión activa
+ * Este controlador solo proporciona:
+ * - /api/auth/status → Verifica si hay un token válido
  *
- * Estos endpoints son la capa BFF que protege el JWT del frontend.
+ * El SPA (Angular/React/Vue) es responsable de:
+ * - Iniciar el flujo Authorization Code + PKCE con Keycloak
+ * - Almacenar el token en localStorage/sessionStorage
+ * - Enviar el token en cada petición (header Authorization)
+ * - Renovar el token cuando expira (usando refresh_token)
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -37,93 +33,14 @@ public class AuthController {
 
     private static final Logger logger = LoggerFactory.getLogger(AuthController.class);
 
-    @Value("${app.frontend.url:http://localhost:4200}")
-    private String frontendUrl;
-
-    private final ClientRegistrationRepository clientRegistrationRepository;
-
-    public AuthController(ClientRegistrationRepository clientRegistrationRepository) {
-        this.clientRegistrationRepository = clientRegistrationRepository;
-    }
-
     /**
-     * Inicia el flujo de autenticación OAuth2 con Keycloak.
+     * Verifica si el usuario tiene un token JWT válido.
      *
-     * Cuando Angular llama a este endpoint, Spring Security automáticamente:
-     * 1. Redirige al usuario a la página de login de Keycloak
-     * 2. El usuario se autentica en Keycloak
-     * 3. Keycloak redirige de vuelta con un authorization code
-     * 4. Spring Boot intercambia el code por un JWT
-     * 5. OAuth2LoginSuccessHandler crea la cookie HttpOnly
-     * 6. Redirige al usuario a Angular /dashboard
-     *
-     * GET http://localhost:8081/api/auth/login
-     *
-     * Respuesta: Redirect 302 a Keycloak
-     */
-    @GetMapping("/login")
-    public void login(HttpServletResponse response) throws IOException {
-        logger.info("Iniciando flujo de login OAuth2");
-
-        // Spring Security se encarga automáticamente de la redirección
-        // Solo necesitamos redirigir al endpoint de OAuth2
-        response.sendRedirect("/oauth2/authorization/keycloak");
-    }
-
-    /**
-     * Cierra la sesión del usuario.
-     *
-     * Este endpoint:
-     * 1. Invalida la cookie ACCESS_TOKEN
-     * 2. Limpia el SecurityContext de Spring Security
-     * 3. (Opcional) Revoca el token en Keycloak
-     *
-     * Llamada desde Angular:
-     * POST http://localhost:8081/api/auth/logout
-     * (con credentials para enviar la cookie)
-     *
-     * @param request La petición HTTP
-     * @param response La respuesta HTTP
-     * @return Mensaje de confirmación
-     */
-    @PostMapping("/logout")
-    public ResponseEntity<Map<String, String>> logout(HttpServletRequest request,
-                                                       HttpServletResponse response) {
-        logger.info("Procesando logout de usuario");
-
-        // Obtener la autenticación actual
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-
-        if (authentication != null) {
-            // Limpiar el contexto de seguridad
-            new SecurityContextLogoutHandler().logout(request, response, authentication);
-            logger.info("SecurityContext limpiado para usuario: " + authentication.getName());
-        }
-
-        // Invalidar la cookie creando una nueva con MaxAge=0
-        Cookie cookie = new Cookie("ACCESS_TOKEN", null);
-        cookie.setPath("/");
-        cookie.setHttpOnly(true);
-        cookie.setMaxAge(0); // Expira inmediatamente
-        response.addCookie(cookie);
-
-        logger.info("Cookie ACCESS_TOKEN invalidada");
-
-        Map<String, String> responseBody = new HashMap<>();
-        responseBody.put("message", "Logout exitoso");
-        responseBody.put("redirect", frontendUrl + "/login");
-
-        return ResponseEntity.ok(responseBody);
-    }
-
-    /**
-     * Verifica si el usuario tiene una sesión activa.
-     *
-     * Angular llama a este endpoint para saber si debe mostrar
-     * contenido autenticado o redirigir al login.
+     * El SPA llama a este endpoint para saber si el token que tiene
+     * almacenado sigue siendo válido.
      *
      * GET http://localhost:8081/api/auth/status
-     * (con credentials para enviar la cookie)
+     * Header: Authorization: Bearer {token}
      *
      * @return Estado de la autenticación
      */
@@ -145,63 +62,55 @@ public class AuthController {
         }
 
         response.put("authenticated", false);
-        response.put("message", "No hay sesión activa");
+        response.put("message", "No hay token válido o el token ha expirado");
 
         return ResponseEntity.ok(response);
     }
 
     /**
-     * Endpoint opcional para obtener la URL de logout de Keycloak.
+     * Endpoint informativo sobre el flujo de autenticación.
      *
-     * Permite hacer un "logout global" que cierra sesión en Keycloak
-     * (SSO logout - cierra sesión en todas las aplicaciones).
+     * Proporciona información útil para desarrolladores sobre cómo
+     * debe funcionar la autenticación en el SPA.
      *
-     * GET http://localhost:8081/api/auth/logout-url
+     * GET http://localhost:8081/api/auth/info
      *
-     * @return URL de logout de Keycloak
+     * @return Información sobre el flujo de autenticación
      */
-    @GetMapping("/logout-url")
-    public ResponseEntity<Map<String, String>> getLogoutUrl() {
-        try {
-            ClientRegistration clientRegistration =
-                    clientRegistrationRepository.findByRegistrationId("keycloak");
+    @GetMapping("/info")
+    public ResponseEntity<Map<String, Object>> getAuthInfo() {
+        Map<String, Object> info = new HashMap<>();
 
-            if (clientRegistration != null) {
-                String logoutUrl = clientRegistration
-                        .getProviderDetails()
-                        .getConfigurationMetadata()
-                        .get("end_session_endpoint")
-                        .toString();
+        info.put("pattern", "SPA with Authorization Code + PKCE");
+        info.put("description", "El SPA gestiona la autenticación directamente con Keycloak");
 
-                // Añadir redirect después del logout
-                String fullLogoutUrl = logoutUrl +
-                        "?post_logout_redirect_uri=" + frontendUrl +
-                        "&client_id=" + clientRegistration.getClientId();
+        Map<String, String> flow = new HashMap<>();
+        flow.put("1", "SPA inicia Authorization Code Flow con PKCE en Keycloak");
+        flow.put("2", "Usuario se autentica en Keycloak");
+        flow.put("3", "Keycloak devuelve code al SPA");
+        flow.put("4", "SPA intercambia code por tokens (access_token + refresh_token)");
+        flow.put("5", "SPA almacena tokens en localStorage/sessionStorage");
+        flow.put("6", "SPA envía token en header Authorization en cada petición");
+        flow.put("7", "Backend valida token y permite acceso");
 
-                Map<String, String> response = new HashMap<>();
-                response.put("logoutUrl", fullLogoutUrl);
+        info.put("flow", flow);
 
-                return ResponseEntity.ok(response);
-            }
-        } catch (Exception e) {
-            logger.error("Error obteniendo URL de logout de Keycloak", e);
-        }
+        Map<String, String> keycloakEndpoints = new HashMap<>();
+        keycloakEndpoints.put("authorization", "http://localhost:9090/realms/mi-realm/protocol/openid-connect/auth");
+        keycloakEndpoints.put("token", "http://localhost:9090/realms/mi-realm/protocol/openid-connect/token");
+        keycloakEndpoints.put("userinfo", "http://localhost:9090/realms/mi-realm/protocol/openid-connect/userinfo");
+        keycloakEndpoints.put("logout", "http://localhost:9090/realms/mi-realm/protocol/openid-connect/logout");
 
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Map.of("error", "No se pudo obtener la URL de logout"));
-    }
+        info.put("keycloak_endpoints", keycloakEndpoints);
 
-    /**
-     * Endpoint de callback después del login (opcional).
-     *
-     * Este endpoint puede ser útil para logging o analytics.
-     * El OAuth2LoginSuccessHandler ya maneja la redirección,
-     * pero este endpoint queda disponible si se necesita.
-     */
-    @GetMapping("/callback")
-    public void loginCallback(HttpServletResponse response) throws IOException {
-        logger.info("Callback de login recibido");
-        // Redirigir al dashboard (ya con cookie creada por el handler)
-        response.sendRedirect(frontendUrl + "/dashboard");
+        Map<String, String> security = new HashMap<>();
+        security.put("token_storage", "localStorage o sessionStorage (accesible desde JavaScript)");
+        security.put("xss_protection", "IMPORTANTE: Proteger contra XSS (sanitizar inputs)");
+        security.put("pkce", "PKCE protege el flujo Authorization Code en clientes públicos");
+        security.put("note", "Menos seguro que BFF pero más simple de implementar");
+
+        info.put("security_notes", security);
+
+        return ResponseEntity.ok(info);
     }
 }
