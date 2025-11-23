@@ -69,3 +69,7 @@ application-secret.yml
 # Logs
 logs/
 *.log
+
+# claude
+.claude
+.serena
