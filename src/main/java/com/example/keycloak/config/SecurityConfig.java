@@ -1,5 +1,6 @@
 package com.example.keycloak.config;
 
+import com.example.keycloak.filter.JwtCookieFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -11,7 +12,12 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -19,10 +25,17 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Configuración de seguridad para la aplicación.
+ * Configuración de seguridad para la aplicación con patrón BFF.
  *
  * Esta clase configura cómo Spring Security debe proteger los endpoints
  * y cómo debe validar los tokens JWT que vienen de Keycloak.
+ *
+ * Características BFF implementadas:
+ * - OAuth2 Login con cookies HttpOnly
+ * - CORS para Angular (localhost:4200)
+ * - Sesiones STATEFUL para cookies
+ * - JwtCookieFilter para extraer JWT de cookies
+ * - Soporte dual: cookies (BFF) y headers (API)
  *
  * @Configuration - Indica que esta clase contiene configuración de Spring
  * @EnableWebSecurity - Habilita la seguridad web de Spring Security
@@ -33,8 +46,17 @@ import java.util.stream.Stream;
 @EnableMethodSecurity(prePostEnabled = true)
 public class SecurityConfig {
 
+    private final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler;
+    private final JwtCookieFilter jwtCookieFilter;
+
+    public SecurityConfig(OAuth2LoginSuccessHandler oauth2LoginSuccessHandler,
+                          JwtCookieFilter jwtCookieFilter) {
+        this.oauth2LoginSuccessHandler = oauth2LoginSuccessHandler;
+        this.jwtCookieFilter = jwtCookieFilter;
+    }
+
     /**
-     * Configuración principal de seguridad.
+     * Configuración principal de seguridad para el patrón BFF.
      *
      * SecurityFilterChain define las reglas de seguridad para las peticiones HTTP.
      *
@@ -45,11 +67,18 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
+            // CORS: Permitir peticiones desde Angular
+            .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+
             // Configuración de autorización de peticiones
             .authorizeHttpRequests(auth -> auth
                 // Permitir acceso público a estos endpoints (sin autenticación)
                 .requestMatchers("/public/**").permitAll()
                 .requestMatchers("/", "/error").permitAll()
+
+                // Permitir endpoints de autenticación BFF sin autenticación previa
+                .requestMatchers("/api/auth/login", "/api/auth/status").permitAll()
+                .requestMatchers("/oauth2/**", "/login/**").permitAll()
 
                 // Endpoints que requieren el rol USER
                 .requestMatchers("/api/user/**").hasRole("USER")
@@ -63,7 +92,8 @@ public class SecurityConfig {
 
             // Configuración de OAuth2 Login (para aplicaciones web con UI)
             .oauth2Login(oauth2 -> oauth2
-                .defaultSuccessUrl("/api/user/me", true)
+                // Handler personalizado que crea la cookie HttpOnly
+                .successHandler(oauth2LoginSuccessHandler)
             )
 
             // Configuración de Resource Server (para validar tokens JWT)
@@ -75,16 +105,72 @@ public class SecurityConfig {
             )
 
             // Configuración de sesiones
-            // STATELESS = No crear sesiones HTTP (usar solo tokens)
+            // STATEFUL = Crear sesiones HTTP para cookies (patrón BFF)
             .sessionManagement(session -> session
-                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
             )
 
-            // Deshabilitar CSRF para APIs REST
-            // IMPORTANTE: Solo si tu app es una API REST sin formularios HTML
+            // Añadir filtro personalizado para extraer JWT de cookies
+            .addFilterBefore(jwtCookieFilter, UsernamePasswordAuthenticationFilter.class)
+
+            // Deshabilitar CSRF temporalmente para desarrollo
+            // TODO: Habilitar en producción con configuración adecuada
             .csrf(csrf -> csrf.disable());
 
         return http.build();
+    }
+
+    /**
+     * Configuración de CORS para permitir peticiones desde Angular.
+     *
+     * IMPORTANTE para el patrón BFF:
+     * - allowCredentials(true) es CRÍTICO para enviar cookies
+     * - allowedOrigins debe ser específico (no "*")
+     * - En producción, usar el dominio real de Angular
+     *
+     * @return Configuración de CORS
+     */
+    @Bean
+    public CorsConfigurationSource corsConfigurationSource() {
+        CorsConfiguration configuration = new CorsConfiguration();
+
+        // Permitir peticiones desde Angular (localhost:4200 en desarrollo)
+        // También permitir null para testing local con archivos HTML
+        configuration.setAllowedOriginPatterns(Arrays.asList(
+                "http://localhost:*",    // Cualquier puerto localhost
+                "http://127.0.0.1:*"     // También 127.0.0.1
+        ));
+
+        // Métodos HTTP permitidos
+        configuration.setAllowedMethods(Arrays.asList(
+                "GET", "POST", "PUT", "DELETE", "OPTIONS"
+        ));
+
+        // Headers permitidos
+        configuration.setAllowedHeaders(Arrays.asList(
+                "Authorization",
+                "Content-Type",
+                "X-Requested-With",
+                "Accept"
+        ));
+
+        // Headers que el navegador puede leer
+        configuration.setExposedHeaders(Arrays.asList(
+                "Set-Cookie"
+        ));
+
+        // CRÍTICO: Permite el envío de cookies
+        configuration.setAllowCredentials(true);
+
+        // Tiempo de cache de la configuración CORS (1 hora)
+        configuration.setMaxAge(3600L);
+
+        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
+        source.registerCorsConfiguration("/api/**", configuration);
+        source.registerCorsConfiguration("/oauth2/**", configuration);
+        source.registerCorsConfiguration("/login/**", configuration);
+
+        return source;
     }
 
     /**

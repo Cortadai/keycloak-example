@@ -1,11 +1,22 @@
 import { ApplicationConfig, provideBrowserGlobalErrorListeners } from '@angular/core';
 import { provideRouter } from '@angular/router';
-
+import { provideHttpClient, withInterceptors } from '@angular/common/http';
 import { routes } from './app.routes';
+import { authInterceptor } from './core/interceptors/auth.interceptor';
 
+/**
+ * Configuración de la aplicación Angular.
+ *
+ * Configuración crítica para BFF:
+ * - provideHttpClient: Habilita HttpClient para peticiones HTTP
+ * - withInterceptors([authInterceptor]): Añade withCredentials a todas las peticiones
+ */
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
-    provideRouter(routes)
+    provideRouter(routes),
+    provideHttpClient(
+      withInterceptors([authInterceptor])
+    )
   ]
 };

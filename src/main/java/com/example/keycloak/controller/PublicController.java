@@ -58,7 +58,7 @@ public class PublicController {
         endpoints.put("admin", "/api/admin/* - Endpoints para administradores (rol ADMIN)");
 
         response.put("endpoints", endpoints);
-        response.put("keycloak", "http://localhost:8080");
+        response.put("keycloak", "http://localhost:9090");
 
         return response;
     }
