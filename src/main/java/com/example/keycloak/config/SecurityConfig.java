@@ -1,6 +1,5 @@
 package com.example.keycloak.config;
 
-import com.example.keycloak.filter.JwtCookieFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
@@ -12,7 +11,6 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -25,21 +23,19 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Configuración de seguridad para la aplicación con patrón BFF.
+ * Configuración de seguridad para la aplicación con patrón BFF + Headers.
  *
- * Esta clase configura cómo Spring Security debe proteger los endpoints
- * y cómo debe validar los tokens JWT que vienen de Keycloak.
+ * Esta versión implementa:
+ * - OAuth2 Login para flujo inicial (callback)
+ * - Bearer tokens en Authorization header (STATELESS)
+ * - CORS sin credentials (no más cookies)
+ * - Resource Server para validación JWT
  *
- * Características BFF implementadas:
- * - OAuth2 Login con cookies HttpOnly
- * - CORS para Angular (localhost:4200)
- * - Sesiones STATEFUL para cookies
- * - JwtCookieFilter para extraer JWT de cookies
- * - Soporte dual: cookies (BFF) y headers (API)
- *
- * @Configuration - Indica que esta clase contiene configuración de Spring
- * @EnableWebSecurity - Habilita la seguridad web de Spring Security
- * @EnableMethodSecurity - Permite usar anotaciones de seguridad en métodos (@PreAuthorize, etc.)
+ * Cambios respecto a la versión con cookies:
+ * - SessionCreationPolicy.STATELESS (no sesiones HTTP)
+ * - Sin JwtCookieFilter (Spring Security maneja Bearer nativo)
+ * - CORS sin allowCredentials
+ * - Nuevos endpoints públicos: /exchange, /refresh
  */
 @Configuration
 @EnableWebSecurity
@@ -47,37 +43,33 @@ import java.util.stream.Stream;
 public class SecurityConfig {
 
     private final OAuth2LoginSuccessHandler oauth2LoginSuccessHandler;
-    private final JwtCookieFilter jwtCookieFilter;
 
-    public SecurityConfig(OAuth2LoginSuccessHandler oauth2LoginSuccessHandler,
-                          JwtCookieFilter jwtCookieFilter) {
+    public SecurityConfig(OAuth2LoginSuccessHandler oauth2LoginSuccessHandler) {
         this.oauth2LoginSuccessHandler = oauth2LoginSuccessHandler;
-        this.jwtCookieFilter = jwtCookieFilter;
     }
 
     /**
-     * Configuración principal de seguridad para el patrón BFF.
-     *
-     * SecurityFilterChain define las reglas de seguridad para las peticiones HTTP.
-     *
-     * @param http El objeto HttpSecurity para configurar la seguridad
-     * @return La cadena de filtros de seguridad configurada
-     * @throws Exception Si hay algún error en la configuración
+     * Configuración principal de seguridad STATELESS con Bearer tokens.
      */
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-            // CORS: Permitir peticiones desde Angular
+            // CORS configurado para headers (sin credentials)
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
 
             // Configuración de autorización de peticiones
             .authorizeHttpRequests(auth -> auth
-                // Permitir acceso público a estos endpoints (sin autenticación)
+                // Endpoints públicos
                 .requestMatchers("/public/**").permitAll()
                 .requestMatchers("/", "/error").permitAll()
 
-                // Permitir endpoints de autenticación BFF sin autenticación previa
-                .requestMatchers("/api/auth/login", "/api/auth/status").permitAll()
+                // Endpoints de autenticación BFF (sin auth previa)
+                .requestMatchers("/api/auth/login").permitAll()
+                .requestMatchers("/api/auth/exchange").permitAll()
+                .requestMatchers("/api/auth/refresh").permitAll()
+                // /status requiere token para que Spring valide el JWT automáticamente
+
+                // OAuth2 flow endpoints
                 .requestMatchers("/oauth2/**", "/login/**").permitAll()
 
                 // Endpoints que requieren el rol USER
@@ -90,55 +82,43 @@ public class SecurityConfig {
                 .anyRequest().authenticated()
             )
 
-            // Configuración de OAuth2 Login (para aplicaciones web con UI)
+            // OAuth2 Login solo para el flujo inicial (redirect a Keycloak)
             .oauth2Login(oauth2 -> oauth2
-                // Handler personalizado que crea la cookie HttpOnly
                 .successHandler(oauth2LoginSuccessHandler)
             )
 
-            // Configuración de Resource Server (para validar tokens JWT)
+            // Resource Server para validar Bearer tokens
             .oauth2ResourceServer(oauth2 -> oauth2
                 .jwt(jwt -> jwt
-                    // Usar nuestro convertidor personalizado para extraer roles
                     .jwtAuthenticationConverter(jwtAuthenticationConverter())
                 )
             )
 
-            // Configuración de sesiones
-            // STATEFUL = Crear sesiones HTTP para cookies (patrón BFF)
+            // STATELESS: No crear sesiones HTTP (tokens en cada petición)
             .sessionManagement(session -> session
-                .sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED)
+                .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
             )
 
-            // Añadir filtro personalizado para extraer JWT de cookies
-            .addFilterBefore(jwtCookieFilter, UsernamePasswordAuthenticationFilter.class)
-
-            // Deshabilitar CSRF temporalmente para desarrollo
-            // TODO: Habilitar en producción con configuración adecuada
+            // Deshabilitar CSRF (no necesario con STATELESS + Bearer tokens)
             .csrf(csrf -> csrf.disable());
 
         return http.build();
     }
 
     /**
-     * Configuración de CORS para permitir peticiones desde Angular.
+     * Configuración de CORS para Bearer tokens.
      *
-     * IMPORTANTE para el patrón BFF:
-     * - allowCredentials(true) es CRÍTICO para enviar cookies
-     * - allowedOrigins debe ser específico (no "*")
-     * - En producción, usar el dominio real de Angular
-     *
-     * @return Configuración de CORS
+     * Sin allowCredentials porque ya no enviamos cookies.
+     * Esto simplifica la configuración y permite "*" en origins si se desea.
      */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Permitir peticiones desde Angular (localhost:4200 en desarrollo)
-        // También permitir null para testing local con archivos HTML
+        // Origins permitidos (en producción usar dominios específicos)
         configuration.setAllowedOriginPatterns(Arrays.asList(
-                "http://localhost:*",    // Cualquier puerto localhost
-                "http://127.0.0.1:*"     // También 127.0.0.1
+                "http://localhost:*",
+                "http://127.0.0.1:*"
         ));
 
         // Métodos HTTP permitidos
@@ -154,15 +134,15 @@ public class SecurityConfig {
                 "Accept"
         ));
 
-        // Headers que el navegador puede leer
+        // Headers expuestos al navegador
         configuration.setExposedHeaders(Arrays.asList(
-                "Set-Cookie"
+                "Authorization"
         ));
 
-        // CRÍTICO: Permite el envío de cookies
-        configuration.setAllowCredentials(true);
+        // NO permitir credentials (no cookies)
+        configuration.setAllowCredentials(false);
 
-        // Tiempo de cache de la configuración CORS (1 hora)
+        // Cache de CORS (1 hora)
         configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
@@ -175,24 +155,13 @@ public class SecurityConfig {
 
     /**
      * Convertidor de JWT a Authentication.
-     *
-     * Este método extrae los roles del token JWT y los convierte en
-     * autoridades (GrantedAuthority) que Spring Security puede entender.
-     *
-     * Los tokens de Keycloak vienen con los roles en dos lugares:
-     * 1. realm_access.roles - Roles del realm
-     * 2. resource_access.{client-id}.roles - Roles específicos del cliente
-     *
-     * @return El convertidor configurado
+     * Extrae roles de Keycloak (realm_access y resource_access).
      */
     private JwtAuthenticationConverter jwtAuthenticationConverter() {
-        // Convertidor por defecto que extrae scopes del token
         JwtGrantedAuthoritiesConverter grantedAuthoritiesConverter = new JwtGrantedAuthoritiesConverter();
 
-        // Crear el convertidor principal
         JwtAuthenticationConverter jwtAuthenticationConverter = new JwtAuthenticationConverter();
 
-        // Establecer cómo extraer las autoridades (roles)
         jwtAuthenticationConverter.setJwtGrantedAuthoritiesConverter(jwt -> {
             // Extraer roles del realm
             Collection<GrantedAuthority> realmRoles = extractRealmRoles(jwt.getClaims());
@@ -200,10 +169,10 @@ public class SecurityConfig {
             // Extraer roles del cliente
             Collection<GrantedAuthority> clientRoles = extractClientRoles(jwt.getClaims());
 
-            // Extraer scopes (usando el convertidor por defecto)
+            // Extraer scopes
             Collection<GrantedAuthority> scopes = grantedAuthoritiesConverter.convert(jwt);
 
-            // Combinar todos los roles y scopes
+            // Combinar todos
             return Stream.of(realmRoles, clientRoles, scopes)
                     .flatMap(Collection::stream)
                     .collect(Collectors.toSet());
@@ -213,17 +182,7 @@ public class SecurityConfig {
     }
 
     /**
-     * Extrae los roles del realm desde el token JWT.
-     *
-     * En el token, los roles del realm están en:
-     * {
-     *   "realm_access": {
-     *     "roles": ["role1", "role2"]
-     *   }
-     * }
-     *
-     * @param claims Los claims del token JWT
-     * @return Lista de autoridades con prefijo ROLE_
+     * Extrae roles del realm desde realm_access.roles
      */
     @SuppressWarnings("unchecked")
     private Collection<GrantedAuthority> extractRealmRoles(Map<String, Object> claims) {
@@ -241,19 +200,7 @@ public class SecurityConfig {
     }
 
     /**
-     * Extrae los roles del cliente desde el token JWT.
-     *
-     * En el token, los roles del cliente están en:
-     * {
-     *   "resource_access": {
-     *     "spring-boot-client": {
-     *       "roles": ["role1", "role2"]
-     *     }
-     *   }
-     * }
-     *
-     * @param claims Los claims del token JWT
-     * @return Lista de autoridades con prefijo ROLE_
+     * Extrae roles del cliente desde resource_access.{client}.roles
      */
     @SuppressWarnings("unchecked")
     private Collection<GrantedAuthority> extractClientRoles(Map<String, Object> claims) {
@@ -263,7 +210,6 @@ public class SecurityConfig {
             return List.of();
         }
 
-        // Extraer roles de todos los clientes
         return resourceAccess.values().stream()
                 .filter(Map.class::isInstance)
                 .map(client -> (Map<String, Object>) client)

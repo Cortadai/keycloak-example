@@ -1,10 +1,10 @@
-# Frontend - Angular BFF
+# Frontend - Angular BFF con Headers + Redis
 
 Documentación completa del frontend implementado con Angular 21 (Standalone Components + Signals).
 
 ---
 
-## 📋 Tabla de Contenidos
+## Tabla de Contenidos
 
 - [Arquitectura](#arquitectura)
 - [Componentes Principales](#componentes-principales)
@@ -15,82 +15,135 @@ Documentación completa del frontend implementado con Angular 21 (Standalone Com
 
 ---
 
-## 🏗️ Arquitectura
+## Arquitectura
 
-### Patrón BFF en el Frontend
+### Patron BFF con Headers en el Frontend
 
-El frontend implementa el lado cliente del patrón BFF donde:
+El frontend implementa el lado cliente del patron BFF donde:
 
-1. **NO almacena tokens** en localStorage/sessionStorage
-2. **Cookies automáticas** enviadas con cada petición (`withCredentials: true`)
-3. **Guards funcionales** protegen rutas sensibles
-4. **Signals** para state management reactivo
-5. **Standalone components** sin NgModules
+1. **Access Token en localStorage** - Accesible para enviar en headers
+2. **Authorization Bearer header** en cada peticion
+3. **Refresh Token en Redis** - NUNCA llega al frontend
+4. **Guards funcionales** protegen rutas sensibles
+5. **Signals** para state management reactivo
+6. **Standalone components** sin NgModules
 
 ### Diagrama de Flujo
 
 ```
-┌─────────────────────────────────────────┐
-│         Angular Application             │
-│                                         │
-│  ┌───────────────────────────────────┐ │
-│  │         AppConfig                 │ │
-│  │  • Router                         │ │
-│  │  • HttpClient                     │ │
-│  │  • authInterceptor                │ │
-│  └───────────────────────────────────┘ │
-│                                         │
-│  ┌───────────────────────────────────┐ │
-│  │      authInterceptor              │ │
-│  │  • withCredentials: true          │ │
-│  │  • Manejo 401/403                 │ │
-│  └───────────────────────────────────┘ │
-│                                         │
-│  ┌───────────────────────────────────┐ │
-│  │      AuthService                  │ │
-│  │  • checkAuthStatus()              │ │
-│  │  • getUserProfile()               │ │
-│  │  • login() / logout()             │ │
-│  │  • Signals: isAuthenticated,      │ │
-│  │    currentUser                    │ │
-│  └───────────────────────────────────┘ │
-│                                         │
-│  ┌───────────────────────────────────┐ │
-│  │      authGuard                    │ │
-│  │  • Verifica autenticación         │ │
-│  │  • Redirect a /login si no auth   │ │
-│  └───────────────────────────────────┘ │
-│                                         │
-│  ┌───────────────────────────────────┐ │
-│  │      Components                   │ │
-│  │  • LoginComponent                 │ │
-│  │  • DashboardComponent             │ │
-│  └───────────────────────────────────┘ │
-└─────────────────────────────────────────┘
++---------------------------------------------+
+|         Angular Application                 |
+|                                             |
+|  +---------------------------------------+  |
+|  |         AppConfig                     |  |
+|  |  - Router                             |  |
+|  |  - HttpClient                         |  |
+|  |  - authInterceptor                    |  |
+|  +---------------------------------------+  |
+|                                             |
+|  +---------------------------------------+  |
+|  |      authInterceptor                  |  |
+|  |  - Anade Bearer token a headers       |  |
+|  |  - Manejo 401: refresh + retry        |  |
+|  |  - Manejo 403: acceso denegado        |  |
+|  +---------------------------------------+  |
+|                                             |
+|  +---------------------------------------+  |
+|  |      AuthService                      |  |
+|  |  - login() / logout()                 |  |
+|  |  - exchangeCode()                     |  |
+|  |  - refreshToken()                     |  |
+|  |  - checkAuthStatus()                  |  |
+|  |  - scheduleTokenRefresh()             |  |
+|  |  - localStorage management            |  |
+|  +---------------------------------------+  |
+|                                             |
+|  +---------------------------------------+  |
+|  |      authGuard                        |  |
+|  |  - Verifica token local               |  |
+|  |  - Verifica con backend               |  |
+|  |  - Intenta refresh si expiro          |  |
+|  |  - Redirect a /login si no auth       |  |
+|  +---------------------------------------+  |
+|                                             |
+|  +---------------------------------------+  |
+|  |      Components                       |  |
+|  |  - LoginComponent                     |  |
+|  |  - CallbackComponent                  |  |
+|  |  - DashboardComponent                 |  |
+|  +---------------------------------------+  |
++---------------------------------------------+
+```
+
+### Flujo de Autenticacion
+
+```
+Usuario          Frontend           Backend            Redis           Keycloak
+   |                 |                 |                 |                 |
+   | Click Login     |                 |                 |                 |
+   |---------------->|                 |                 |                 |
+   |                 | GET /api/auth/login               |                 |
+   |                 |---------------->|                 |                 |
+   |                 |                 | OAuth2 Redirect |                 |
+   |                 |                 |---------------------------------->|
+   |                 |                 |                 |                 |
+   | Login Form      |                 |                 |                 |
+   |<-------------------------------------------------------------------- |
+   |                 |                 |                 |                 |
+   | Credenciales    |                 |                 |                 |
+   |-------------------------------------------------------------------->|
+   |                 |                 |                 |                 |
+   |                 |                 | Callback + Auth Code              |
+   |                 |                 |<----------------------------------|
+   |                 |                 |                 |                 |
+   |                 |                 | Store temp_code |                 |
+   |                 |                 | (UUID, TTL 30s) |                 |
+   |                 |                 |---------------->|                 |
+   |                 |                 |                 |                 |
+   |                 | Redirect /callback?code=uuid      |                 |
+   |                 |<----------------|                 |                 |
+   |                 |                 |                 |                 |
+   |                 | POST /api/auth/exchange           |                 |
+   |                 | { code: uuid }  |                 |                 |
+   |                 |---------------->|                 |                 |
+   |                 |                 | Get temp_code   |                 |
+   |                 |                 |---------------->|                 |
+   |                 |                 |<----------------|                 |
+   |                 |                 | Store refresh   |                 |
+   |                 |                 |---------------->|                 |
+   |                 |                 |                 |                 |
+   |                 | { accessToken, expiresIn }        |                 |
+   |                 |<----------------|                 |                 |
+   |                 |                 |                 |                 |
+   |                 | localStorage.set()                |                 |
+   |                 | Schedule refresh                  |                 |
+   |                 |                 |                 |                 |
+   | Dashboard       |                 |                 |                 |
+   |<----------------|                 |                 |                 |
 ```
 
 ---
 
-## 🔧 Componentes Principales
+## Componentes Principales
 
 ### 1. app.config.ts
 
-**Ubicación**: `frontend/src/app/app.config.ts`
+**Ubicacion**: `frontend/src/app/app.config.ts`
 
-**Responsabilidad**: Configuración global de Angular.
+**Responsabilidad**: Configuracion global de Angular.
 
 ```typescript
 export const appConfig: ApplicationConfig = {
   providers: [
     provideRouter(routes),
     provideHttpClient(
-      withInterceptors([authInterceptor])  // ✅ Interceptor global
+      withInterceptors([authInterceptor])  // Interceptor global
     )
   ]
 };
 ```
 
-**Características**:
+**Caracteristicas**:
 - Router configurado con rutas
 - HttpClient con interceptor `authInterceptor`
 - No necesita NgModules (standalone)
@@ -99,9 +152,9 @@ export const appConfig: ApplicationConfig = {
 
 ### 2. app.routes.ts
 
-**Ubicación**: `frontend/src/app/app.routes.ts`
+**Ubicacion**: `frontend/src/app/app.routes.ts`
 
-**Responsabilidad**: Definición de rutas con protección.
+**Responsabilidad**: Definicion de rutas con proteccion.
 
 ```typescript
 export const routes: Routes = [
@@ -115,9 +168,13 @@ export const routes: Routes = [
     component: LoginComponent
   },
   {
+    path: 'callback',
+    component: CallbackComponent  // Nueva ruta para intercambio
+  },
+  {
     path: 'dashboard',
     component: DashboardComponent,
-    canActivate: [authGuard]  // ✅ Protegida con guard
+    canActivate: [authGuard]  // Protegida con guard
   },
   {
     path: '**',
@@ -126,17 +183,19 @@ export const routes: Routes = [
 ];
 ```
 
-**Rutas protegidas**:
-- `/dashboard`: Requiere autenticación (authGuard)
-- Cualquier ruta no definida → redirect a `/login`
+**Rutas**:
+- `/login`: Pantalla de login
+- `/callback`: Intercambio de codigo temporal por accessToken
+- `/dashboard`: Requiere autenticacion (authGuard)
+- Cualquier ruta no definida -> redirect a `/login`
 
 ---
 
 ### 3. LoginComponent
 
-**Ubicación**: `frontend/src/app/features/login/login.component.ts`
+**Ubicacion**: `frontend/src/app/features/login/login.component.ts`
 
-**Responsabilidad**: Pantalla de login con diseño moderno.
+**Responsabilidad**: Pantalla de login con diseno moderno.
 
 ```typescript
 @Component({
@@ -145,32 +204,22 @@ export const routes: Routes = [
   template: `
     <div class="login-container">
       <div class="login-card">
-        <div class="lock-icon">🔒</div>
+        <div class="lock-icon">...</div>
         <h1>Keycloak Spring Demo</h1>
-        <p class="subtitle">Patrón BFF con Cookies HttpOnly</p>
+        <p class="subtitle">Patron BFF con JWT en Headers + Redis</p>
 
         <button class="login-button" (click)="login()">
           Login con Keycloak
         </button>
 
         <div class="security-info">
-          <p>✅ Tokens seguros en cookies HttpOnly</p>
-          <p>✅ Protección contra XSS y CSRF</p>
-          <p>✅ OAuth2 con Keycloak</p>
+          <p>El Access Token se almacena en localStorage.</p>
+          <p>El Refresh Token permanece seguro en Redis
+             (nunca llega al navegador).</p>
         </div>
       </div>
     </div>
-  `,
-  styles: [`
-    .login-container {
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-    // ... más estilos
-  `]
+  `
 })
 export class LoginComponent {
   private authService = inject(AuthService);
@@ -181,17 +230,85 @@ export class LoginComponent {
 }
 ```
 
-**Características**:
+**Caracteristicas**:
 - Standalone component
 - Inline template y styles
-- Diseño moderno con gradiente
-- Un solo botón: "Login con Keycloak"
+- Diseno moderno con gradiente
+- Un solo boton: "Login con Keycloak"
 
 ---
 
-### 4. DashboardComponent
+### 4. CallbackComponent
 
-**Ubicación**: `frontend/src/app/features/dashboard/dashboard.component.ts`
+**Ubicacion**: `frontend/src/app/features/callback/callback.component.ts`
+
+**Responsabilidad**: Intercambiar codigo temporal por accessToken.
+
+```typescript
+@Component({
+  selector: 'app-callback',
+  standalone: true,
+  template: `
+    <div class="callback-container">
+      @if (error()) {
+        <div class="error-card">
+          <h2>Error de Autenticacion</h2>
+          <p>{{ error() }}</p>
+          <button (click)="goToLogin()">Volver al Login</button>
+        </div>
+      } @else {
+        <div class="loading">
+          <div class="spinner"></div>
+          <p>Completando autenticacion...</p>
+        </div>
+      }
+    </div>
+  `
+})
+export class CallbackComponent implements OnInit {
+  private authService = inject(AuthService);
+  private router = inject(Router);
+  private route = inject(ActivatedRoute);
+
+  error = signal<string | null>(null);
+
+  ngOnInit(): void {
+    // Obtener codigo temporal de query params
+    const code = this.route.snapshot.queryParamMap.get('code');
+
+    if (!code) {
+      this.error.set('No se recibio codigo de autenticacion');
+      return;
+    }
+
+    // Intercambiar codigo por accessToken
+    this.authService.exchangeCode(code).subscribe({
+      next: () => {
+        this.router.navigate(['/dashboard']);
+      },
+      error: (err) => {
+        this.error.set(err.error?.message || 'Error al completar autenticacion');
+      }
+    });
+  }
+
+  goToLogin(): void {
+    this.router.navigate(['/login']);
+  }
+}
+```
+
+**Caracteristicas**:
+- Extrae codigo temporal de `?code=xxx`
+- Llama a `/api/auth/exchange` para obtener accessToken
+- Guarda token en localStorage
+- Redirige a dashboard o muestra error
+
+---
+
+### 5. DashboardComponent
+
+**Ubicacion**: `frontend/src/app/features/dashboard/dashboard.component.ts`
 
 **Responsabilidad**: Dashboard del usuario autenticado.
 
@@ -202,7 +319,6 @@ export class LoginComponent {
   imports: [CommonModule],
   template: `
     <div class="dashboard-container">
-      <!-- Navbar -->
       <nav class="navbar">
         <h1>Dashboard</h1>
         <button class="logout-button" (click)="logout()">
@@ -210,29 +326,21 @@ export class LoginComponent {
         </button>
       </nav>
 
-      <!-- Loading State -->
       @if (loading()) {
         <div class="loading">Cargando...</div>
       }
 
-      <!-- Error State -->
       @else if (error()) {
-        <div class="error">
-          Error: {{ error() }}
-        </div>
+        <div class="error">Error: {{ error() }}</div>
       }
 
-      <!-- Success State - User Info -->
       @else if (user()) {
         <div class="content">
-          <!-- Welcome Card -->
           <div class="welcome-card">
             <div class="avatar">{{ getInitials(user()!.name) }}</div>
             <h2>Bienvenido, {{ user()!.name }}!</h2>
-            <p>Has iniciado sesión correctamente</p>
           </div>
 
-          <!-- Info Cards -->
           <div class="info-grid">
             <div class="info-card">
               <h3>Usuario</h3>
@@ -246,33 +354,31 @@ export class LoginComponent {
               <h3>Roles</h3>
               <div class="roles">
                 @for (role of user()!.roles; track role) {
-                  <span class="role-badge">{{ role }}</span>
+                  <span class="role-badge">{{ formatRole(role) }}</span>
                 }
               </div>
             </div>
           </div>
 
-          <!-- Security Info -->
           <div class="security-section">
-            <h3>🔐 Seguridad BFF Activa</h3>
+            <h3>Informacion de Seguridad BFF</h3>
             <ul>
-              <li>✅ JWT almacenado en cookie HttpOnly</li>
-              <li>✅ JavaScript no puede acceder al token</li>
-              <li>✅ SameSite=Strict protege contra CSRF</li>
-              <li>✅ Roles validados en backend</li>
+              <li>Access Token en localStorage + header Authorization Bearer</li>
+              <li>Refresh Token seguro en Redis (nunca expuesto al frontend)</li>
+              <li>Refresh proactivo antes de expirar + reactivo en 401</li>
+              <li>Sesion unica por usuario (nuevo login invalida el anterior)</li>
+              <li>Autenticacion OAuth2 gestionada por Keycloak</li>
             </ul>
           </div>
         </div>
       }
     </div>
-  `,
-  styles: [/* estilos modernos */]
+  `
 })
 export class DashboardComponent implements OnInit {
   private authService = inject(AuthService);
   private router = inject(Router);
 
-  // Signals para state reactivo
   user = signal<User | null>(null);
   loading = signal(true);
   error = signal<string | null>(null);
@@ -300,32 +406,28 @@ export class DashboardComponent implements OnInit {
       error: () => this.router.navigate(['/login'])
     });
   }
-
-  getInitials(name: string): string {
-    return name.split(' ').map(n => n[0]).join('').toUpperCase();
-  }
 }
 ```
 
-**Características**:
+**Caracteristicas**:
 - Signals para state management
 - Nueva sintaxis `@if` / `@else` / `@for` de Angular
 - Loading, error y success states
-- Responsive design (grid → column en mobile)
-- Logout button en navbar
+- Responsive design
 
 ---
 
-## 🔐 Servicios y State Management
+## Servicios y State Management
 
 ### AuthService
 
-**Ubicación**: `frontend/src/app/core/services/auth.service.ts`
+**Ubicacion**: `frontend/src/app/core/services/auth.service.ts`
 
 **Responsabilidades**:
-- Gestionar autenticación
-- State management con Signals y BehaviorSubject
-- Comunicación con backend BFF
+- Gestionar autenticacion
+- localStorage para accessToken
+- Comunicacion con backend BFF
+- Refresh proactivo y reactivo
 
 ```typescript
 @Injectable({
@@ -335,138 +437,253 @@ export class AuthService {
   private http = inject(HttpClient);
   private readonly API_URL = 'http://localhost:8081/api';
 
-  // BehaviorSubject para streams reactivos
-  private authStatusSubject = new BehaviorSubject<AuthStatus>({
-    authenticated: false,
-    username: null
-  });
-  public authStatus$ = this.authStatusSubject.asObservable();
-
-  // Signals para state reactivo
-  isAuthenticated = signal(false);
-  currentUser = signal<User | null>(null);
+  private readonly TOKEN_KEY = 'access_token';
+  private readonly EXPIRY_KEY = 'token_expiry';
+  private refreshTimer: any = null;
 
   /**
-   * Inicia el flujo OAuth2 con Keycloak
-   * Redirige a backend que redirige a Keycloak
+   * Inicia el flujo OAuth2 con Keycloak.
+   * Redirige a backend que redirige a Keycloak.
    */
   login(): void {
+    console.log('[AuthService] Iniciando login...');
     window.location.href = `${this.API_URL}/auth/login`;
   }
 
   /**
-   * Cierra sesión e invalida cookie
+   * Intercambia codigo temporal por accessToken.
+   * El backend devuelve accessToken + expiresIn.
+   * El refreshToken se guarda en Redis (nunca llega aqui).
    */
-  logout(): Observable<any> {
-    return this.http.post(`${this.API_URL}/auth/logout`, {}).pipe(
-      tap(() => {
-        this.isAuthenticated.set(false);
-        this.currentUser.set(null);
-        this.authStatusSubject.next({
-          authenticated: false,
-          username: null
+  exchangeCode(code: string): Observable<any> {
+    console.log('[AuthService] Intercambiando codigo temporal...');
+
+    return this.http.post<any>(`${this.API_URL}/auth/exchange`, { code }).pipe(
+      tap(response => {
+        // Guardar accessToken en localStorage
+        this.setToken(response.accessToken, response.expiresIn);
+
+        // Programar refresh proactivo
+        this.scheduleTokenRefresh(response.expiresIn);
+
+        console.log('[AuthService] Token guardado, refresh programado');
+      })
+    );
+  }
+
+  /**
+   * Guarda token y timestamp de expiracion en localStorage.
+   */
+  private setToken(token: string, expiresIn: number): void {
+    localStorage.setItem(this.TOKEN_KEY, token);
+
+    // Calcular timestamp de expiracion
+    const expiryTime = Date.now() + (expiresIn * 1000);
+    localStorage.setItem(this.EXPIRY_KEY, expiryTime.toString());
+  }
+
+  /**
+   * Obtiene el token almacenado.
+   */
+  getStoredToken(): string | null {
+    return localStorage.getItem(this.TOKEN_KEY);
+  }
+
+  /**
+   * Verifica si el token ha expirado localmente.
+   */
+  isTokenExpired(): boolean {
+    const expiryStr = localStorage.getItem(this.EXPIRY_KEY);
+    if (!expiryStr) return true;
+
+    const expiry = parseInt(expiryStr, 10);
+    // Considerar expirado 30 segundos antes (margen de seguridad)
+    return Date.now() > (expiry - 30000);
+  }
+
+  /**
+   * Programa el refresh proactivo del token.
+   * Se ejecuta 2 minutos antes de que expire.
+   */
+  scheduleTokenRefresh(expiresIn: number): void {
+    // Cancelar timer anterior si existe
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+    }
+
+    // Refrescar 2 minutos antes de expirar
+    const refreshTime = (expiresIn - 120) * 1000;
+
+    if (refreshTime > 0) {
+      console.log(`[AuthService] Refresh programado en ${Math.round(refreshTime / 60000)} minutos`);
+
+      this.refreshTimer = setTimeout(() => {
+        console.log('[AuthService] Ejecutando refresh proactivo...');
+        this.refreshToken().subscribe({
+          next: () => console.log('[AuthService] Refresh proactivo exitoso'),
+          error: () => console.warn('[AuthService] Refresh proactivo fallo')
         });
-      })
-    );
+      }, refreshTime);
+    }
   }
 
   /**
-   * Verifica si hay sesión activa
-   * Usado por authGuard antes de cada navegación
+   * Solicita un nuevo accessToken usando el refreshToken en Redis.
+   * Requiere enviar el Bearer token actual para identificar al usuario.
    */
-  checkAuthStatus(): Observable<AuthStatus> {
-    return this.http.get<AuthStatus>(`${this.API_URL}/auth/status`).pipe(
-      tap(status => this.updateAuthState(status)),
-      catchError(() => {
-        this.updateAuthState({ authenticated: false, username: null });
-        return of({ authenticated: false, username: null });
+  refreshToken(): Observable<any> {
+    console.log('[AuthService] Solicitando refresh token...');
+
+    return this.http.post<any>(`${this.API_URL}/auth/refresh`, {}).pipe(
+      tap(response => {
+        this.setToken(response.accessToken, response.expiresIn);
+        this.scheduleTokenRefresh(response.expiresIn);
+        console.log('[AuthService] Token refrescado exitosamente');
       })
     );
   }
 
   /**
-   * Obtiene perfil completo del usuario
+   * Verifica si hay sesion activa.
+   * Usado por authGuard antes de cada navegacion.
+   */
+  checkAuthStatus(): Observable<any> {
+    return this.http.get<any>(`${this.API_URL}/auth/status`).pipe(
+      catchError(() => of({ authenticated: false }))
+    );
+  }
+
+  /**
+   * Obtiene perfil completo del usuario.
    */
   getUserProfile(): Observable<User> {
-    return this.http.get<User>(`${this.API_URL}/user/me`).pipe(
-      tap(user => this.currentUser.set(user))
+    return this.http.get<User>(`${this.API_URL}/user/me`);
+  }
+
+  /**
+   * Cierra sesion.
+   * Elimina token local y revoca refresh en Redis.
+   */
+  logout(): Observable<any> {
+    console.log('[AuthService] Cerrando sesion...');
+
+    return this.http.post(`${this.API_URL}/auth/logout`, {}).pipe(
+      tap(() => {
+        this.clearTokens();
+        console.log('[AuthService] Sesion cerrada');
+      }),
+      catchError(() => {
+        this.clearTokens();
+        return of(null);
+      })
     );
   }
 
   /**
-   * Actualiza el state cuando cambia autenticación
+   * Limpia tokens del localStorage.
    */
-  private updateAuthState(status: AuthStatus): void {
-    this.isAuthenticated.set(status.authenticated);
-    this.authStatusSubject.next(status);
+  clearTokens(): void {
+    localStorage.removeItem(this.TOKEN_KEY);
+    localStorage.removeItem(this.EXPIRY_KEY);
+
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = null;
+    }
   }
 }
 ```
 
-**¿Por qué Signals + BehaviorSubject?**
-- **Signals**: State local reactivo (Angular 16+)
-- **BehaviorSubject**: Streams para subscripciones múltiples
-- Ambos se complementan para diferentes use cases
+**Por que localStorage?**
+- El accessToken necesita enviarse en headers
+- JavaScript necesita acceso para anadir `Authorization: Bearer`
+- El refreshToken NUNCA esta en localStorage (solo en Redis)
 
-**¿Por qué NO se almacena el token?**
-- El token está en cookie HttpOnly
-- JavaScript NO puede acceder a él
-- Se envía automáticamente con cada petición
+**Refresh proactivo vs reactivo:**
+- **Proactivo**: Timer que refresca 2 min antes de expirar
+- **Reactivo**: Interceptor que reintenta en 401
 
 ---
 
-## 🛡️ Guards y Seguridad
+## Guards y Seguridad
 
 ### authGuard
 
-**Ubicación**: `frontend/src/app/core/guards/auth.guard.ts`
+**Ubicacion**: `frontend/src/app/core/guards/auth.guard.ts`
 
-**Responsabilidad**: Proteger rutas que requieren autenticación.
+**Responsabilidad**: Proteger rutas que requieren autenticacion.
 
 ```typescript
 export const authGuard: CanActivateFn = (route, state) => {
   const authService = inject(AuthService);
   const router = inject(Router);
 
+  console.log('[AuthGuard] Verificando acceso a:', state.url);
+
+  // 1. Verificacion rapida: hay token en localStorage?
+  const token = authService.getStoredToken();
+
+  if (!token) {
+    console.log('[AuthGuard] No hay token, redirigiendo a login');
+    router.navigate(['/login'], {
+      queryParams: { returnUrl: state.url }
+    });
+    return of(false);
+  }
+
+  // 2. Verificacion local: token expirado?
+  if (authService.isTokenExpired()) {
+    console.log('[AuthGuard] Token expirado, intentando refresh...');
+
+    return authService.refreshToken().pipe(
+      map(() => {
+        console.log('[AuthGuard] Refresh exitoso, acceso permitido');
+        return true;
+      }),
+      catchError(() => {
+        console.log('[AuthGuard] Refresh fallo, redirigiendo a login');
+        router.navigate(['/login']);
+        return of(false);
+      })
+    );
+  }
+
+  // 3. Verificacion con backend: token valido?
+  console.log('[AuthGuard] Verificando con backend...');
+
   return authService.checkAuthStatus().pipe(
     map(status => {
       if (status.authenticated) {
-        console.log('AuthGuard: Usuario autenticado, permitiendo acceso');
+        console.log('[AuthGuard] Backend confirmo, acceso permitido');
         return true;
       } else {
-        console.log('AuthGuard: Usuario no autenticado, redirigiendo a /login');
+        console.log('[AuthGuard] Backend rechazo, redirigiendo a login');
         router.navigate(['/login']);
         return false;
       }
     }),
     catchError(() => {
-      console.error('AuthGuard: Error verificando autenticación');
-      router.navigate(['/login']);
-      return of(false);
+      // Error de red pero hay token local - acceso optimista
+      console.log('[AuthGuard] Error de red, permitiendo acceso optimista');
+      return of(true);
     })
   );
 };
 ```
 
-**Flujo del guard**:
-1. Se ejecuta antes de cada navegación a ruta protegida
-2. Llama a `authService.checkAuthStatus()`
-3. Backend verifica cookie y devuelve `{ authenticated: true/false }`
-4. Si `true`: permite navegación
-5. Si `false`: redirect a `/login`
-
-**¿Por qué verificar en backend?**
-- La cookie HttpOnly NO es accesible desde JavaScript
-- El frontend NO puede verificar validez del token
-- Solo el backend puede validar el JWT
+**Flujo de verificacion**:
+1. Hay token en localStorage?
+2. Esta expirado localmente? -> Intentar refresh
+3. Verificar con backend si token sigue valido
+4. Si error de red -> acceso optimista (hay token local)
 
 ---
 
 ### roleGuard (Factory)
 
-**Ubicación**: `frontend/src/app/core/guards/auth.guard.ts`
+**Ubicacion**: `frontend/src/app/core/guards/auth.guard.ts`
 
-**Responsabilidad**: Verificar roles específicos.
+**Responsabilidad**: Verificar roles especificos.
 
 ```typescript
 export function roleGuard(requiredRole: string): CanActivateFn {
@@ -476,11 +693,15 @@ export function roleGuard(requiredRole: string): CanActivateFn {
 
     return authService.getUserProfile().pipe(
       map(user => {
-        if (user.roles.includes(requiredRole)) {
+        const hasRole = user.roles.some(role =>
+          role === requiredRole || role === `ROLE_${requiredRole}`
+        );
+
+        if (hasRole) {
           return true;
         } else {
-          console.error(`roleGuard: Usuario no tiene rol ${requiredRole}`);
-          router.navigate(['/access-denied']);
+          console.warn(`[RoleGuard] Usuario no tiene rol ${requiredRole}`);
+          router.navigate(['/dashboard']);
           return false;
         }
       }),
@@ -506,48 +727,89 @@ export function roleGuard(requiredRole: string): CanActivateFn {
 
 ### authInterceptor
 
-**Ubicación**: `frontend/src/app/core/interceptors/auth.interceptor.ts`
+**Ubicacion**: `frontend/src/app/core/interceptors/auth.interceptor.ts`
 
-**Responsabilidad**: Configurar peticiones HTTP con credentials.
+**Responsabilidad**: Anadir Bearer token y manejar 401.
 
 ```typescript
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
+  const authService = inject(AuthService);
   const router = inject(Router);
 
-  // CRÍTICO: withCredentials permite enviar cookies
-  const authReq = req.clone({
-    withCredentials: true
-  });
+  // Endpoints que NO deben llevar token
+  if (isAuthEndpoint(req.url)) {
+    return next(req);
+  }
+
+  // Obtener token de localStorage
+  const token = authService.getStoredToken();
+
+  // Clonar request con header Authorization
+  let authReq = req;
+  if (token) {
+    authReq = req.clone({
+      setHeaders: {
+        Authorization: `Bearer ${token}`
+      }
+    });
+    console.log(`[Interceptor] Bearer token anadido a ${req.url}`);
+  }
 
   return next(authReq).pipe(
     catchError((error: HttpErrorResponse) => {
-      if (error.status === 401) {
-        console.log('No autenticado (401), redirigiendo a login');
-        router.navigate(['/login']);
-      } else if (error.status === 403) {
-        console.log('Acceso denegado (403)');
-        // Opcional: mostrar página de acceso denegado
+      if (error.status === 401 && !req.url.includes('/auth/refresh')) {
+        console.log('[Interceptor] 401 recibido, intentando refresh...');
+
+        // Intentar refresh y reintentar peticion original
+        return authService.refreshToken().pipe(
+          switchMap(() => {
+            const newToken = authService.getStoredToken();
+            const retryReq = req.clone({
+              setHeaders: {
+                Authorization: `Bearer ${newToken}`
+              }
+            });
+            console.log('[Interceptor] Reintentando peticion con nuevo token');
+            return next(retryReq);
+          }),
+          catchError((refreshError) => {
+            console.log('[Interceptor] Refresh fallo, redirigiendo a login');
+            authService.clearTokens();
+            router.navigate(['/login']);
+            return throwError(() => error);
+          })
+        );
       }
+
+      if (error.status === 403) {
+        console.warn('[Interceptor] Acceso denegado (403)');
+      }
+
       return throwError(() => error);
     })
   );
 };
+
+function isAuthEndpoint(url: string): boolean {
+  const authEndpoints = [
+    '/api/auth/exchange',
+    '/api/auth/login'
+  ];
+  return authEndpoints.some(endpoint => url.includes(endpoint));
+}
 ```
 
-**¿Por qué withCredentials: true?**
-- Por defecto, `fetch` y `XMLHttpRequest` NO envían cookies cross-origin
-- `withCredentials: true` indica al navegador que incluya cookies
-- Sin esto, la cookie `ACCESS_TOKEN` NO se enviaría
-
-**Manejo de errores**:
-- **401 Unauthorized**: Redirect a login (sesión expirada o no autenticado)
-- **403 Forbidden**: Usuario autenticado pero sin permisos
+**Caracteristicas**:
+- Anade `Authorization: Bearer {token}` a todas las peticiones
+- Excepto endpoints de autenticacion inicial
+- En 401: intenta refresh automatico y reintenta peticion
+- Si refresh falla: limpia tokens y redirige a login
 
 ---
 
-## 📊 Models
+## Models
 
-**Ubicación**: `frontend/src/app/core/models/user.model.ts`
+**Ubicacion**: `frontend/src/app/core/models/user.model.ts`
 
 ```typescript
 export interface User {
@@ -564,20 +826,20 @@ export interface AuthStatus {
   username: string | null;
 }
 
-export interface Authority {
-  authority: string;
+export interface TokenResponse {
+  accessToken: string;
+  expiresIn: number;
+  message?: string;
 }
 
 export interface LogoutResponse {
   message: string;
-  redirect: string;
-  logoutUrl?: string;
 }
 ```
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ### Test 1: Verificar Pantalla de Login
 
@@ -587,9 +849,9 @@ npm start
 ```
 
 Abrir `http://localhost:4200`:
-- ✅ Debe mostrar pantalla de login
-- ✅ Botón "Login con Keycloak"
-- ✅ Diseño con gradiente morado
+- Debe mostrar pantalla de login
+- Boton "Login con Keycloak"
+- Info sobre JWT en Headers + Redis
 
 ---
 
@@ -598,50 +860,45 @@ Abrir `http://localhost:4200`:
 1. Click en "Login con Keycloak"
 2. Verificar redirect a Keycloak (`localhost:9090`)
 3. Autenticarse
-4. Verificar redirect a `localhost:4200/dashboard`
-5. Verificar cookie en DevTools:
-   - Application → Cookies → `http://localhost:8081`
-   - Buscar `ACCESS_TOKEN`
-   - `HttpOnly` = ✅
-   - `SameSite` = Strict
+4. Verificar redirect a `localhost:4200/callback?code=xxx`
+5. Verificar redirect automatico a `/dashboard`
+6. Verificar en DevTools:
+   - Application -> Local Storage -> `http://localhost:4200`
+   - Buscar `access_token` y `token_expiry`
 
 ---
 
 ### Test 3: Dashboard Carga Datos
 
 En el dashboard, verificar:
-- ✅ Navbar con "Dashboard" y botón "Logout"
-- ✅ Welcome card con avatar (iniciales)
-- ✅ Info cards: Usuario, Email, Roles
-- ✅ Roles mostrados como badges
-- ✅ Sección de seguridad BFF
+- Navbar con "Dashboard" y boton "Logout"
+- Welcome card con avatar (iniciales)
+- Info cards: Usuario, Email, Roles
+- Roles mostrados como badges
+- Seccion de seguridad BFF
 
 ---
 
-### Test 4: Verificar withCredentials en Network Tab
+### Test 4: Verificar Bearer Token en Network Tab
 
-1. Abrir DevTools → Network
+1. Abrir DevTools -> Network
 2. Filtrar por `user/me`
-3. Click en la petición
-4. Headers → Request Headers
+3. Click en la peticion
+4. Headers -> Request Headers
 5. Verificar:
 ```
-Cookie: ACCESS_TOKEN=eyJhbGc...; JSESSIONID=...
+Authorization: Bearer eyJhbGc...
 ```
-
-✅ Cookie debe estar presente en el header
 
 ---
 
 ### Test 5: AuthGuard Protege Rutas
 
 1. Hacer logout
-2. Intentar navegar manualmente a `http://localhost:4200/dashboard`
-3. Verificar redirect automático a `/login`
-4. Console debe mostrar:
-```
-AuthGuard: Usuario no autenticado, redirigiendo a /login
-```
+2. Limpiar localStorage (DevTools -> Application -> Clear)
+3. Intentar navegar a `http://localhost:4200/dashboard`
+4. Verificar redirect automatico a `/login`
+5. Console debe mostrar logs del guard
 
 ---
 
@@ -649,104 +906,122 @@ AuthGuard: Usuario no autenticado, redirigiendo a /login
 
 1. Estando en dashboard, click en "Logout"
 2. Verificar redirect a `/login`
-3. Verificar en DevTools que cookie `ACCESS_TOKEN` desapareció o tiene `Max-Age=0`
-4. Intentar acceder a `/dashboard` → debe redirigir a `/login`
+3. Verificar en DevTools que localStorage esta vacio
+4. Verificar en Redis que no hay refresh_token del usuario
+5. Intentar acceder a `/dashboard` -> debe redirigir a `/login`
 
 ---
 
-### Test 7: Responsividad
+### Test 7: Refresh Automatico
 
-1. DevTools → Toggle device toolbar (Ctrl+Shift+M)
-2. Probar tamaños:
-   - Mobile (375px): Grid de info-cards debe ser 1 columna
-   - Tablet (768px): Grid debe ser 2 columnas
-   - Desktop (1200px): Grid debe ser 3 columnas
+1. Abrir Console en DevTools
+2. Esperar unos minutos
+3. Verificar logs de refresh proactivo:
+```
+[AuthService] Refresh programado en X minutos
+[AuthService] Ejecutando refresh proactivo...
+[AuthService] Refresh proactivo exitoso
+```
 
 ---
 
-## 🐛 Troubleshooting
+### Test 8: Refresh Reactivo (401)
+
+1. Modificar `token_expiry` en localStorage a un valor pasado
+2. Hacer una peticion (recargar dashboard)
+3. Verificar en Console:
+```
+[Interceptor] 401 recibido, intentando refresh...
+[Interceptor] Reintentando peticion con nuevo token
+```
+
+---
+
+## Troubleshooting
 
 ### Problema: Error CORS
 
-**Síntoma**:
+**Sintoma**:
 ```
-Access to fetch at 'http://localhost:8081/api/auth/status' from origin
-'http://localhost:4200' has been blocked by CORS policy: The value of
-the 'Access-Control-Allow-Origin' header in the response must not be
-the wildcard '*' when the request's credentials mode is 'include'.
+Access to fetch at 'http://localhost:8081/api/...' from origin
+'http://localhost:4200' has been blocked by CORS policy
 ```
 
-**Causa**: Backend no permite `allowCredentials` o tiene CORS mal configurado.
+**Causa**: Backend no esta corriendo o CORS mal configurado.
 
-**Solución**: Verificar backend (`SecurityConfig.java`):
-```java
-configuration.setAllowedOriginPatterns(Arrays.asList(
-    "http://localhost:*",
-    "http://127.0.0.1:*"
-));
-configuration.setAllowCredentials(true);  // CRÍTICO
-```
+**Solucion**:
+1. Verificar que backend este en puerto 8081
+2. Verificar `SecurityConfig.java` tiene CORS configurado
 
 ---
 
-### Problema: Cookie no se envía
+### Problema: Bearer token no se envia
 
-**Síntoma**: Network tab muestra petición sin header `Cookie`.
+**Sintoma**: Network tab muestra peticion sin header `Authorization`.
 
 **Causas posibles**:
-1. `withCredentials: true` no está configurado
-2. Cookie domain no coincide
-3. Cookie SameSite bloqueando petición
+1. No hay token en localStorage
+2. La URL esta en la lista de exclusion del interceptor
+3. El interceptor no esta registrado
 
-**Solución**:
+**Solucion**:
 
-1. Verificar `authInterceptor.ts`:
+1. Verificar localStorage tiene `access_token`
+2. Verificar `auth.interceptor.ts` no excluye la URL
+3. Verificar `app.config.ts`:
 ```typescript
-const authReq = req.clone({
-  withCredentials: true  // Debe estar presente
-});
+provideHttpClient(
+  withInterceptors([authInterceptor])
+)
 ```
-
-2. Verificar que backend y frontend están en `localhost` (mismo dominio).
-
-3. Verificar cookie en DevTools:
-   - Domain: `localhost` ✅
-   - SameSite: `Strict` ✅
 
 ---
 
 ### Problema: Dashboard muestra "Error al cargar perfil"
 
-**Síntoma**: Dashboard carga pero muestra error.
+**Sintoma**: Dashboard carga pero muestra error.
 
-**Diagnóstico**:
+**Diagnostico**:
 
 1. Abrir Network tab
-2. Buscar petición a `/api/user/me`
+2. Buscar peticion a `/api/user/me`
 3. Ver status code:
-   - **401**: Cookie no está siendo enviada o es inválida
-   - **403**: Usuario autenticado pero sin rol USER
+   - **401**: Token invalido o expirado
+   - **403**: Usuario sin rol USER
    - **500**: Error en backend
 
 **Soluciones**:
-- 401: Verificar cookie y `withCredentials`
+- 401: Hacer logout y login de nuevo
 - 403: Verificar roles del usuario en Keycloak
 - 500: Ver logs del backend
 
 ---
 
+### Problema: Codigo temporal invalido o expirado
+
+**Sintoma**: En callback, muestra error de codigo invalido.
+
+**Causa**: El codigo temporal tiene TTL de 30 segundos.
+
+**Solucion**:
+1. Verificar que Redis este corriendo
+2. Reintentar login mas rapidamente
+3. Verificar logs del backend
+
+---
+
 ### Problema: AuthGuard no funciona
 
-**Síntoma**: Puedes acceder a `/dashboard` sin login.
+**Sintoma**: Puedes acceder a `/dashboard` sin login.
 
-**Causa**: Guard no está registrado en la ruta.
+**Causa**: Guard no esta registrado en la ruta.
 
-**Solución**: Verificar `app.routes.ts`:
+**Solucion**: Verificar `app.routes.ts`:
 ```typescript
 {
   path: 'dashboard',
   component: DashboardComponent,
-  canActivate: [authGuard]  // ✅ Debe estar presente
+  canActivate: [authGuard]  // Debe estar presente
 }
 ```
 
@@ -754,41 +1029,26 @@ const authReq = req.clone({
 
 ### Problema: Signals no actualizan UI
 
-**Síntoma**: Los datos cambian pero la UI no se actualiza.
+**Sintoma**: Los datos cambian pero la UI no se actualiza.
 
-**Causa**: No estás usando `.set()` para actualizar el signal.
+**Causa**: No estas usando `.set()` para actualizar el signal.
 
-**Solución**:
+**Solucion**:
 ```typescript
-// ❌ Incorrecto
+// Incorrecto
 this.user = newUser;
 
-// ✅ Correcto
+// Correcto
 this.user.set(newUser);
 ```
 
 ---
 
-### Problema: JWT visible en document.cookie
-
-**Síntoma**: En console, `document.cookie` muestra `ACCESS_TOKEN=...`.
-
-**Causa**: Cookie NO tiene `HttpOnly=true`.
-
-**Solución**: Verificar backend (`OAuth2LoginSuccessHandler`):
-```java
-cookie.setHttpOnly(true);  // Debe ser true
-```
-
-Si `HttpOnly=true`, entonces `document.cookie` NO debe mostrar `ACCESS_TOKEN`. Esto es correcto y esperado.
-
----
-
-## 🚀 Mejoras Futuras
+## Mejoras Futuras
 
 ### 1. Environment Files
 
-Crear archivos de configuración por entorno:
+Crear archivos de configuracion por entorno:
 
 ```typescript
 // src/environments/environment.ts
@@ -804,39 +1064,7 @@ export const environment = {
 };
 ```
 
-Usar en `AuthService`:
-```typescript
-private readonly API_URL = environment.apiUrl;
-```
-
----
-
-### 2. Refresh Token Automático
-
-Interceptor que detecta 401 e intenta refresh transparente:
-
-```typescript
-export const authInterceptor: HttpInterceptorFn = (req, next) => {
-  return next(req).pipe(
-    catchError((error: HttpErrorResponse) => {
-      if (error.status === 401 && !req.url.includes('/refresh')) {
-        // Intentar refresh
-        return authService.refreshToken().pipe(
-          switchMap(() => {
-            // Retry petición original
-            return next(req.clone({ withCredentials: true }));
-          })
-        );
-      }
-      return throwError(() => error);
-    })
-  );
-};
-```
-
----
-
-### 3. Página de Admin
+### 2. Pagina de Admin
 
 Componente solo accesible con rol ADMIN:
 
@@ -848,55 +1076,28 @@ Componente solo accesible con rol ADMIN:
 }
 ```
 
----
+### 3. Loading Global
 
-### 4. Loading Global
+Servicio global de loading para todas las peticiones HTTP.
 
-Servicio global de loading para todas las peticiones HTTP:
+### 4. Toast Notifications
 
-```typescript
-@Injectable({
-  providedIn: 'root'
-})
-export class LoadingService {
-  loading = signal(false);
-  private requestCount = 0;
+Implementar notificaciones para feedback del usuario.
 
-  show(): void {
-    this.requestCount++;
-    this.loading.set(true);
-  }
+### 5. LogService Condicional
 
-  hide(): void {
-    this.requestCount--;
-    if (this.requestCount <= 0) {
-      this.requestCount = 0;
-      this.loading.set(false);
-    }
-  }
-}
-```
+Logs solo en desarrollo, no en produccion.
 
 ---
 
-### 5. Toast Notifications
-
-Implementar notificaciones para feedback del usuario:
-- Login exitoso
-- Logout exitoso
-- Errores de permisos
-
----
-
-## 📖 Referencias
+## Referencias
 
 - [Angular Official Docs](https://angular.dev)
 - [Angular Signals Guide](https://angular.dev/guide/signals)
 - [Standalone Components](https://angular.dev/guide/components)
-- [HttpClient withCredentials](https://angular.dev/api/common/http/HttpClient)
+- [HttpClient Interceptors](https://angular.dev/guide/http/interceptors)
 - [Functional Guards](https://angular.dev/guide/routing/common-router-tasks#preventing-unauthorized-access)
-- [OWASP Cookie Security](https://owasp.org/www-community/controls/SecureCookieAttribute)
 
 ---
 
-**Ir a**: [Documentación Principal](README.md) | [Documentación Backend](BACK_BFF.md)
+**Ir a**: [Documentacion Principal](README.md) | [Documentacion Backend](BACK_BFF.md)

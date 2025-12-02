@@ -93,12 +93,13 @@ import { User } from '../../core/models/user.model';
           </div>
 
           <div class="security-info">
-            <h3>🔒 Información de Seguridad</h3>
+            <h3>🔒 Información de Seguridad BFF</h3>
             <ul>
-              <li>Tu sesión está protegida con cookies HttpOnly</li>
-              <li>El token JWT nunca es accesible desde JavaScript</li>
-              <li>Protección CSRF con SameSite=Strict</li>
-              <li>Autenticación gestionada por Keycloak</li>
+              <li>Access Token en localStorage + header Authorization Bearer</li>
+              <li>Refresh Token seguro en Redis (nunca expuesto al frontend)</li>
+              <li>Refresh proactivo antes de expirar + reactivo en 401</li>
+              <li>Sesión única por usuario (nuevo login invalida el anterior)</li>
+              <li>Autenticación OAuth2 gestionada por Keycloak</li>
             </ul>
           </div>
         }

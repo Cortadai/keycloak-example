@@ -1,134 +1,167 @@
-# Keycloak Spring Boot + Angular - Patrón BFF
+# Keycloak Spring Boot + Angular - Patrón BFF (Headers + Redis)
 
-## 🎯 Descripción
+## Descripción
 
-Aplicación de demostración que implementa el **patrón Backend for Frontend (BFF)** con autenticación OAuth2 mediante Keycloak, utilizando cookies HttpOnly para máxima seguridad.
+Aplicación de demostración que implementa el **patrón Backend for Frontend (BFF)** con autenticación OAuth2 mediante Keycloak.
+
+**Esta rama (`oauth2-bff-headers`)** usa Bearer tokens en headers HTTP con refresh tokens almacenados en Redis.
 
 ### Tecnologías Principales
 
 - **Backend**: Spring Boot 3.x + Spring Security OAuth2
 - **Frontend**: Angular 21 (Standalone Components + Signals)
 - **Autenticación**: Keycloak (OAuth2 Authorization Code Flow)
-- **Seguridad**: JWT en cookies HttpOnly + SameSite=Strict
+- **Token Store**: Redis (refresh tokens y códigos temporales)
+- **Seguridad**: Bearer tokens + refresh en Redis
 
 ---
 
-## 🏗️ Arquitectura BFF
+## Arquitectura BFF con Headers
 
 ### ¿Qué es el patrón BFF?
 
-El **Backend for Frontend** es un patrón arquitectónico donde:
+El **Backend for Frontend** en esta versión:
 
-1. El **frontend NO almacena tokens** en localStorage/sessionStorage (vulnerable a XSS)
-2. El **backend gestiona los tokens** y los almacena en cookies HttpOnly
-3. El **frontend envía cookies automáticamente** con cada petición
+1. El **frontend almacena accessToken en localStorage**
+2. El **backend gestiona refresh tokens en Redis** (nunca salen al frontend)
+3. Las peticiones llevan **header `Authorization: Bearer`**
 4. El **backend valida tokens** y protege endpoints
 
 ### Flujo de Autenticación
 
 ```
-┌─────────┐         ┌──────────────┐         ┌──────────┐
-│ Angular │         │ Spring Boot  │         │ Keycloak │
-│  :4200  │         │    :8081     │         │  :9090   │
-└────┬────┘         └──────┬───────┘         └────┬─────┘
-     │                     │                      │
-     │ 1. GET /api/auth/login                    │
-     ├────────────────────>│                      │
-     │                     │ 2. OAuth2 redirect   │
-     │                     ├─────────────────────>│
-     │ 3. Login form       │                      │
-     │<────────────────────┼──────────────────────┤
-     │                     │                      │
-     │ 4. Credentials      │                      │
-     ├─────────────────────┼─────────────────────>│
-     │                     │ 5. Authorization code│
-     │                     │<─────────────────────┤
-     │                     │                      │
-     │                     │ 6. Exchange code for JWT
-     │                     ├─────────────────────>│
-     │                     │<─────────────────────┤
-     │                     │ 7. JWT token         │
-     │                     │                      │
-     │ 8. Set-Cookie: ACCESS_TOKEN (HttpOnly)    │
-     │<────────────────────┤                      │
-     │                     │                      │
-     │ 9. GET /api/user/me │                      │
-     │    Cookie: ACCESS_TOKEN                    │
-     ├────────────────────>│                      │
-     │                     │ 10. Validate JWT     │
-     │                     │ 11. Extract roles    │
-     │<────────────────────┤                      │
-     │ 12. User data       │                      │
+┌─────────┐         ┌──────────────┐        ┌───────┐      ┌──────────┐
+│ Angular │         │ Spring Boot  │        │ Redis │      │ Keycloak │
+│  :4200  │         │    :8081     │        │ :6379 │      │  :9090   │
+└────┬────┘         └──────┬───────┘        └───┬───┘      └────┬─────┘
+     │                     │                    │               │
+     │ 1. GET /api/auth/login                   │               │
+     ├────────────────────>│                    │               │
+     │                     │ 2. OAuth2 redirect │               │
+     │                     ├────────────────────────────────────>
+     │ 3. Login en Keycloak│                    │               │
+     │<─────────────────────────────────────────────────────────┤
+     │                     │                    │               │
+     │ 4. Callback con auth code                │               │
+     │                     │<───────────────────────────────────┤
+     │                     │                    │               │
+     │                     │ 5. Exchange code for tokens        │
+     │                     ├───────────────────────────────────>│
+     │                     │<───────────────────────────────────┤
+     │                     │                    │               │
+     │                     │ 6. Store temp_code │               │
+     │                     │    (UUID, TTL 30s) │               │
+     │                     ├───────────────────>│               │
+     │                     │                    │               │
+     │ 7. Redirect /callback?code=uuid          │               │
+     │<────────────────────┤                    │               │
+     │                     │                    │               │
+     │ 8. POST /api/auth/exchange               │               │
+     │    { code: uuid }   │                    │               │
+     ├────────────────────>│                    │               │
+     │                     │ 9. Get + Delete    │               │
+     │                     │    temp_code       │               │
+     │                     ├───────────────────>│               │
+     │                     │<──────────────────┤               │
+     │                     │                    │               │
+     │                     │ 10. Store          │               │
+     │                     │     refresh_token  │               │
+     │                     ├───────────────────>│               │
+     │                     │                    │               │
+     │ 11. { accessToken, expiresIn }           │               │
+     │<────────────────────┤                    │               │
+     │                     │                    │               │
+     │ 12. localStorage.set(accessToken)        │               │
+     │                     │                    │               │
+     │ 13. GET /api/user/me                     │               │
+     │     Authorization: Bearer <JWT>          │               │
+     ├────────────────────>│                    │               │
+     │<────────────────────┤ User data          │               │
 ```
 
 ### Características de Seguridad
 
-✅ **Cookies HttpOnly**: JavaScript no puede acceder al token
-✅ **SameSite=Strict**: Protección automática contra CSRF
-✅ **CORS configurado**: Solo origins específicos permitidos
-✅ **Validación dual**: Frontend (guards) + Backend (@PreAuthorize)
-✅ **Session Management**: STATEFUL para cookies de sesión
-✅ **Role-Based Access Control**: Roles de Keycloak extraídos automáticamente
+✅ **El frontend NUNCA ve el refresh token**
+✅ **El client_secret NUNCA está en el frontend**
+✅ **Código temporal de uso único** (TTL 30s, se elimina al usar)
+✅ **Refresh proactivo** (antes de que expire) + reactivo (en 401)
+✅ **Sesión única por usuario** (nuevo login invalida el anterior)
+✅ **CORS simplificado** (sin credentials)
+
+### Trade-offs vs Cookies HttpOnly
+
+| Aspecto | Cookies HttpOnly | Headers + Redis |
+|---------|-----------------|-----------------|
+| XSS | Protegido | Expuesto (localStorage) |
+| CSRF | Posible (mitigado con SameSite) | No aplica |
+| Cross-domain | Complejo | Simple |
+| API Gateway | Problemático | Compatible |
+| Escalabilidad | Sesiones server-side | Stateless + Redis |
 
 ---
 
-## 📁 Estructura del Proyecto
+## Estructura del Proyecto
 
 ```
 keycloak-spring-demo/
+├── docker-compose.yml                    # Keycloak + Redis
 ├── src/main/java/com/example/keycloak/
 │   ├── config/
-│   │   ├── SecurityConfig.java              # Configuración BFF
-│   │   └── OAuth2LoginSuccessHandler.java   # Gestión de cookies
+│   │   ├── SecurityConfig.java           # STATELESS, Bearer tokens
+│   │   ├── OAuth2LoginSuccessHandler.java # Genera código temporal
+│   │   └── RedisConfig.java              # Configuración Redis
 │   ├── controller/
-│   │   ├── AuthController.java              # Endpoints de autenticación
-│   │   ├── UserController.java              # Endpoints para usuarios
-│   │   ├── AdminController.java             # Endpoints para admins
-│   │   └── PublicController.java            # Endpoints públicos
-│   ├── filter/
-│   │   └── JwtCookieFilter.java             # Extrae JWT de cookies
+│   │   ├── AuthController.java           # /exchange, /refresh, /logout
+│   │   ├── UserController.java           # Endpoints para usuarios
+│   │   ├── AdminController.java          # Endpoints para admins
+│   │   └── PublicController.java         # Endpoints públicos
+│   ├── service/
+│   │   ├── TokenService.java             # CRUD Redis
+│   │   └── KeycloakTokenService.java     # Refresh/Revoke en KC
+│   ├── dto/                              # DTOs de request/response
 │   └── model/
-│       └── UserInfo.java                    # DTOs
+│       ├── UserInfo.java
+│       └── TokenData.java                # Datos en Redis
 │
 ├── frontend/src/app/
 │   ├── core/
-│   │   ├── models/user.model.ts             # Interfaces TypeScript
-│   │   ├── services/auth.service.ts         # Servicio de autenticación
-│   │   ├── guards/auth.guard.ts             # Guards de rutas
-│   │   └── interceptors/auth.interceptor.ts # withCredentials
+│   │   ├── models/user.model.ts          # Interfaces TypeScript
+│   │   ├── services/auth.service.ts      # localStorage + refresh timer
+│   │   ├── guards/auth.guard.ts          # Verificación local + backend
+│   │   └── interceptors/auth.interceptor.ts # Bearer header + 401 retry
 │   ├── features/
-│   │   ├── login/                           # Componente de login
-│   │   └── dashboard/                       # Dashboard del usuario
-│   ├── app.config.ts                        # Configuración de Angular
-│   └── app.routes.ts                        # Rutas protegidas
+│   │   ├── login/                        # Componente de login
+│   │   ├── callback/                     # Intercambio de código
+│   │   └── dashboard/                    # Dashboard del usuario
+│   ├── app.config.ts
+│   └── app.routes.ts                     # Incluye ruta /callback
 │
-├──  BACK_BFF.md                             # Documentación del backend
-├──  FRONT_BFF.md                            # Documentación del frontend
-└──  README.md                               # Este archivo
+├── CLAUDE.md                             # Guía para Claude Code
+└── README.md                             # Este archivo
 ```
 
 ---
 
-## 🚀 Inicio Rápido
+## Inicio Rápido
 
 ### Prerequisitos
 
 1. **Java 17+** y Maven instalados
 2. **Node.js 18+** y npm instalados
-3. **Docker** para Keycloak
+3. **Docker** para Keycloak y Redis
 
-### Paso 1: Levantar Keycloak
+### Paso 1: Levantar Infraestructura
 
 ```bash
-docker run -d \
-  --name keycloak \
-  -p 9090:8080 \
-  -e KEYCLOAK_ADMIN=admin \
-  -e KEYCLOAK_ADMIN_PASSWORD=admin \
-  quay.io/keycloak/keycloak:latest start-dev
+docker-compose up -d
 ```
 
-**Configurar Keycloak:**
+Esto levanta:
+- **Keycloak** en `http://localhost:9090` (admin/admin)
+- **Redis** en `localhost:6379`
+
+### Paso 2: Configurar Keycloak
+
 1. Acceder a `http://localhost:9090`
 2. Login con admin/admin
 3. Crear realm: `mi-realm`
@@ -136,20 +169,21 @@ docker run -d \
 5. Configurar:
    - Valid Redirect URIs: `http://localhost:8081/*`
    - Web Origins: `http://localhost:4200`
-6. Crear roles: `user`, `admin`
-7. Crear usuario de prueba y asignar roles
+6. Copiar el Client Secret a `application.yml`
+7. Crear roles: `user`, `admin`
+8. Crear usuario de prueba y asignar roles
 
-### Paso 2: Ejecutar Backend
+### Paso 3: Ejecutar Backend
 
 ```bash
-# Actualizar client-secret en application.yml
+# Actualizar client-secret en application.yml si es necesario
 mvn clean install
 mvn spring-boot:run
 ```
 
 Verificar: `http://localhost:8081/public/status`
 
-### Paso 3: Ejecutar Frontend
+### Paso 4: Ejecutar Frontend
 
 ```bash
 cd frontend
@@ -159,26 +193,31 @@ npm start
 
 Verificar: `http://localhost:4200`
 
-### Paso 4: Probar
+### Paso 5: Probar
 
 1. Navegar a `http://localhost:4200`
 2. Click en "Login con Keycloak"
 3. Autenticarse en Keycloak
-4. Verificar dashboard con información del usuario
-5. Abrir DevTools → Application → Cookies
-6. Verificar cookie `ACCESS_TOKEN` con HttpOnly=true
+4. Verificar que redirige a `/callback` y luego a `/dashboard`
+5. Abrir DevTools → Application → Local Storage
+6. Verificar `access_token` y `token_expiry`
+7. Verificar en Redis: `docker exec -it redis redis-cli KEYS "*"`
 
 ---
 
-## 🔐 Endpoints de la API
+## Endpoints de la API
 
 ### Autenticación
 
 | Endpoint | Método | Acceso | Descripción |
 |----------|--------|--------|-------------|
 | `/api/auth/login` | GET | Público | Inicia OAuth2 con Keycloak |
-| `/api/auth/status` | GET | Público | Verifica sesión activa |
-| `/api/auth/logout` | POST | Autenticado | Cierra sesión |
+| `/api/auth/exchange` | POST | Público | Intercambia código temporal por accessToken |
+| `/api/auth/refresh` | POST | Público* | Renueva accessToken (requiere Bearer header) |
+| `/api/auth/status` | GET | Público* | Verifica validez del Bearer token |
+| `/api/auth/logout` | POST | Autenticado | Cierra sesión, revoca tokens |
+
+*Requieren Bearer token para funcionar correctamente
 
 ### Usuario (Rol: USER)
 
@@ -206,137 +245,103 @@ Verificar: `http://localhost:4200`
 
 ---
 
-## 📚 Documentación Detallada
-
-### Backend
-
-Ver **[docs/backend/README.md](docs/backend/BACK_BFF.md)** para:
-- Arquitectura del backend
-- Configuración de Spring Security
-- Gestión de cookies HttpOnly
-- Extracción de roles de Keycloak
-- Testing y troubleshooting
-
-### Frontend
-
-Ver **[docs/frontend/README.md](docs/frontend/FRONT_BFF.md)** para:
-- Arquitectura del frontend
-- Servicios y guards de Angular
-- Componentes y routing
-- Testing y troubleshooting
-
----
-
-## 🔧 Configuración
+## Configuración
 
 ### Puertos
 
-- **Keycloak**: 9090 (Docker: 9090:8080)
+- **Keycloak**: 9090
 - **Spring Boot**: 8081
 - **Angular**: 4200
+- **Redis**: 6379
 
 ### Variables de Entorno
 
 **Backend** (`application.yml`):
 ```yaml
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
 app:
   frontend:
     url: http://localhost:4200
-  cookie:
-    secure: false  # true en producción (HTTPS)
-    max-age: 3600  # 1 hora
+  keycloak:
+    revoke-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/revoke
 ```
 
-**Frontend**:
-- API URL: `http://localhost:8081/api` (hardcoded en `auth.service.ts`)
-- Para producción: crear environment files
+---
+
+## Testing
+
+### Verificar Redis
+
+```bash
+# Ver todas las claves
+docker exec -it redis redis-cli KEYS "*"
+
+# Ver un refresh token específico
+docker exec -it redis redis-cli GET "refresh_token:{userId}"
+
+# Ver TTL de una clave
+docker exec -it redis redis-cli TTL "refresh_token:{userId}"
+```
+
+### Verificar Flujo Completo
+
+1. Login → Verificar redirect a `/callback`
+2. Verificar `access_token` en localStorage
+3. Verificar `refresh_token:{userId}` en Redis
+4. Esperar a que expire o forzar 401
+5. Verificar refresh automático en console
+6. Logout → Verificar localStorage vacío y Redis sin refresh token
 
 ---
 
-## ✅ Checklist de Producción
+## Troubleshooting
 
-### Backend
-- [ ] Cambiar `cookie.secure: true` (requiere HTTPS)
-- [ ] Actualizar CORS a dominio de producción
-- [ ] Client-secret como variable de entorno
-- [ ] Habilitar CSRF
-- [ ] Logs a nivel INFO
+### Error: "Código temporal inválido o expirado"
 
-### Frontend
-- [ ] Crear environment files (prod/dev)
-- [ ] API URL dinámica desde environment
-- [ ] Build optimizado: `ng build --configuration production`
-- [ ] Content Security Policy
+- El código temporal tiene TTL de 30 segundos
+- Verifica que Redis esté corriendo: `docker-compose ps`
+- Revisa logs del backend para más detalles
 
-### Keycloak
-- [ ] Valid Redirect URIs de producción
-- [ ] Web Origins de producción
-- [ ] Habilitar HTTPS
-- [ ] Backup de configuración
+### Error: "No se encontró refresh token"
 
----
+- El usuario fue deslogueado o expiró la sesión
+- Nuevo login en otra pestaña invalida el refresh token anterior
+- Solución: Hacer login nuevamente
 
-## 🎓 Conceptos Aprendidos
+### 401 en todas las peticiones
 
-### Seguridad
-- OAuth2 Authorization Code Flow
-- Patrón Backend for Frontend (BFF)
-- Cookies HttpOnly vs localStorage
-- CSRF y SameSite cookies
-- CORS con credentials
-- JWT validation y RBAC
+- Verificar que el token esté en localStorage
+- Verificar que el interceptor esté añadiendo el header
+- Verificar logs del backend para errores de validación JWT
 
-### Tecnologías
-- Spring Security OAuth2 Client + Resource Server
-- Keycloak Integration
-- Angular Standalone Components
-- Angular Signals
-- Functional Guards e Interceptors
-- RxJS Observables
+### CORS Errors
 
----
-
-## 🚧 Mejoras Futuras (Opcional)
-
-1. **Refresh Token Automático Avanzado**
-   - Interceptor que detecta 401 y refresh transparente
-
-2. **Logout Global SSO**
-   - Implementar `end_session_endpoint` de Keycloak
-   - Logout en todas las aplicaciones del SSO
-
-3. **HTTPS en Desarrollo**
-   - Certificados self-signed
-   - Cookie Secure=true
-
-4. **Página de Admin**
-   - Solo accesible con rol ADMIN
-   - Uso de `roleGuard('ROLE_ADMIN')`
-
----
-
-## ❓ Troubleshooting
-
-### Error CORS
-- Verificar que Spring Boot está corriendo
+- Ya no se requiere `withCredentials: true`
+- Verificar que el backend esté corriendo
 - Verificar configuración CORS en `SecurityConfig.java`
-- Restart Spring Boot
-
-### Cookie no se crea
-- Verificar logs: "Cookie de sesión creada exitosamente"
-- Verificar `SameSite=Strict` en `OAuth2LoginSuccessHandler`
-- Limpiar cookies del navegador
-
-### 401 en peticiones
-- Verificar cookie en DevTools
-- Verificar `withCredentials: true` en Angular
-- Verificar CORS permite credentials
 
 ---
 
-## 📖 Referencias
+## Comparación de Ramas
+
+Este repositorio tiene dos implementaciones del patrón BFF:
+
+| Rama | Transporte | Refresh Token | Sesión |
+|------|-----------|---------------|--------|
+| `oauth2-bff-cookies` | Cookies HttpOnly | En cookie | STATEFUL |
+| `oauth2-bff-headers` | Authorization header | En Redis | STATELESS |
+
+---
+
+## Referencias
 
 - [Spring Security OAuth2](https://spring.io/guides/tutorials/spring-boot-oauth2/)
 - [Keycloak Documentation](https://www.keycloak.org/documentation)
 - [Angular Security Guide](https://angular.dev/best-practices/security)
 - [BFF Pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/backends-for-frontends)
+- [Redis Documentation](https://redis.io/documentation)

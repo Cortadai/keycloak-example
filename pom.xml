@@ -53,6 +53,12 @@
             <artifactId>spring-boot-starter-json</artifactId>
         </dependency>
 
+        <!-- Redis para almacenar refresh tokens y códigos temporales -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <!-- Lombok para reducir código boilerplate -->
         <dependency>
             <groupId>org.projectlombok</groupId>

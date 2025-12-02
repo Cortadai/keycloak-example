@@ -1,27 +1,19 @@
 # Configuración de la aplicación Spring Boot con Keycloak
-# Patrón BFF (Backend for Frontend) con cookies HttpOnly
+# Patrón BFF (Backend for Frontend) con Headers Bearer
 
 server:
-  port: 8081  # Puerto diferente al de Keycloak (que usa 9090)
-
-  # Configuración de cookies de sesión para patrón BFF
-  servlet:
-    session:
-      cookie:
-        # HttpOnly: JavaScript no puede acceder (protección XSS)
-        http-only: true
-        # Secure: solo HTTPS (false en desarrollo, true en producción)
-        secure: false
-        # SameSite: protección CSRF
-        same-site: strict
-        # Path: disponible en toda la aplicación
-        path: /
-        # MaxAge: -1 significa sesión del navegador (hasta que se cierre)
-        max-age: -1
+  port: 8081
 
 spring:
   application:
     name: keycloak-spring-demo
+
+  # Configuración de Redis para almacenar tokens
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      timeout: 5000ms
 
   # Configuración de OAuth2 Client (para login)
   security:
@@ -29,58 +21,42 @@ spring:
       client:
         registration:
           keycloak:
-            # ID del client que crearás en Keycloak
             client-id: spring-boot-client
-            # Secret del client (confidential client)
-            client-secret: secreto-de-prueba  # Cambiar por secret verdadero
-            # Tipo de autorización
+            client-secret: fzmAdt2kAN6QOYWzD7lFkM6CxTsl8W5h
             authorization-grant-type: authorization_code
-            # A dónde redirigir después del login
             redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
-            # Scopes que solicitamos
             scope:
               - openid
               - profile
               - email
         provider:
           keycloak:
-            # URL base de tu Keycloak
             issuer-uri: http://localhost:9090/realms/mi-realm
-            # Endpoint de autorización
             authorization-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/auth
-            # Endpoint para obtener tokens
             token-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/token
-            # Endpoint de información del usuario
             user-info-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/userinfo
-            # Endpoint para obtener la configuración JWKS (claves públicas)
             jwk-set-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/certs
-            # Campo que contiene el nombre de usuario
             user-name-attribute: preferred_username
 
-      # Configuración de Resource Server (para validar tokens)
+      # Configuración de Resource Server (para validar Bearer tokens)
       resourceserver:
         jwt:
-          # URL para obtener las claves públicas que validan los JWT
           jwk-set-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/certs
-          # Issuer esperado en los tokens
           issuer-uri: http://localhost:9090/realms/mi-realm
 
 # Configuración personalizada para la aplicación BFF
 app:
-  # URL del frontend Angular (para redirecciones)
   frontend:
     url: http://localhost:4200
 
-  # Configuración de cookies de acceso
-  cookie:
-    # Secure: false en desarrollo, true en producción
-    secure: false
-    # Tiempo de vida de la cookie en segundos (1 hora = 3600)
-    max-age: 3600
+  # Configuración de Keycloak para revocación de tokens
+  keycloak:
+    revoke-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/revoke
 
-# Configuración de logging para ver qué está pasando
+# Configuración de logging
 logging:
   level:
     org.springframework.security: DEBUG
     org.springframework.security.oauth2: DEBUG
+    org.springframework.data.redis: DEBUG
     com.example.keycloak: DEBUG

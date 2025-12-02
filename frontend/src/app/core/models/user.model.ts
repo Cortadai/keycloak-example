@@ -31,6 +31,21 @@ export interface Authority {
  * Respuesta de logout
  */
 export interface LogoutResponse {
+  success: boolean;
   message: string;
-  redirect: string;
+}
+
+/**
+ * Respuesta del endpoint de intercambio de código temporal
+ */
+export interface TokenResponse {
+  accessToken: string;
+  expiresIn: number;
+}
+
+/**
+ * Request para intercambiar código temporal
+ */
+export interface ExchangeRequest {
+  code: string;
 }

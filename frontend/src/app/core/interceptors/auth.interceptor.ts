@@ -1,48 +1,152 @@
-import { HttpInterceptorFn, HttpErrorResponse } from '@angular/common/http';
+import { HttpInterceptorFn, HttpErrorResponse, HttpRequest, HttpHandlerFn } from '@angular/common/http';
 import { inject } from '@angular/core';
 import { Router } from '@angular/router';
-import { catchError, throwError } from 'rxjs';
+import { catchError, switchMap, throwError, Observable, BehaviorSubject, filter, take } from 'rxjs';
+import { AuthService } from '../services/auth.service';
 
 /**
- * Interceptor HTTP para el patrón BFF con cookies.
+ * Prefijo para logs del interceptor
+ */
+const LOG_PREFIX = '🔒 [Interceptor]';
+
+/**
+ * Flag para evitar múltiples refreshes simultáneos
+ */
+let isRefreshing = false;
+const refreshTokenSubject: BehaviorSubject<string | null> = new BehaviorSubject<string | null>(null);
+
+/**
+ * Interceptor HTTP para el patrón BFF con Bearer tokens.
  *
  * Responsabilidades:
- * 1. Añadir withCredentials=true a TODAS las peticiones al backend
- * 2. Manejar errores de autenticación (401, 403)
- * 3. Redirigir al login cuando sea necesario
+ * 1. Añadir header Authorization: Bearer {token} a todas las peticiones
+ * 2. Manejar errores 401 con refresh automático y retry
+ * 3. Redirigir al login si el refresh falla
  *
- * CRÍTICO para BFF:
- * - withCredentials=true es OBLIGATORIO para enviar cookies HttpOnly
- * - Sin esto, las cookies no se envían y todas las peticiones fallan
+ * Estrategia de refresh:
+ * - Proactivo: Timer en AuthService (antes de expirar)
+ * - Reactivo: Este interceptor (en caso de 401)
  */
 export const authInterceptor: HttpInterceptorFn = (req, next) => {
   const router = inject(Router);
+  const authService = inject(AuthService);
 
-  // CRÍTICO: Añadir withCredentials a la petición
-  // Esto hace que el navegador envíe las cookies automáticamente
-  const authReq = req.clone({
-    withCredentials: true
-  });
+  // Extraer la parte final de la URL para logs más legibles
+  const urlPath = new URL(req.url, window.location.origin).pathname;
 
-  return next(authReq).pipe(
+  // No añadir token a endpoints públicos de auth (exchange, refresh)
+  if (isAuthEndpoint(req.url)) {
+    console.log(`${LOG_PREFIX} ${req.method} ${urlPath} (sin token - endpoint público)`);
+    return next(req);
+  }
+
+  // Obtener token de localStorage
+  const token = authService.getStoredToken();
+
+  // Si hay token, añadirlo al header
+  if (token) {
+    console.log(`${LOG_PREFIX} ${req.method} ${urlPath}`);
+    console.log(`   → Añadiendo header: Authorization: Bearer ${token.substring(0, 15)}...`);
+    req = addTokenToRequest(req, token);
+  } else {
+    console.log(`${LOG_PREFIX} ${req.method} ${urlPath} (sin token en localStorage)`);
+  }
+
+  return next(req).pipe(
     catchError((error: HttpErrorResponse) => {
-      // Manejar errores de autenticación
-      if (error.status === 401) {
-        // 401 Unauthorized: No hay sesión o token expirado
-        console.warn('No autenticado (401), redirigiendo a login');
-        router.navigate(['/login']);
-      } else if (error.status === 403) {
-        // 403 Forbidden: Usuario autenticado pero sin permisos
-        console.warn('Acceso denegado (403)');
-        // Opcional: redirigir a página de "acceso denegado"
-        // router.navigate(['/access-denied']);
-      } else if (error.status === 0) {
-        // Error de red o CORS
-        console.error('Error de red o CORS:', error);
+      // Si es 401 y no es un endpoint de auth, intentar refresh
+      if (error.status === 401 && !isAuthEndpoint(req.url)) {
+        console.warn(`${LOG_PREFIX} ⚠️ Respuesta 401 en ${urlPath} - Intentando refresh...`);
+        return handle401Error(req, next, router, authService);
       }
 
-      // Propagar el error para que lo maneje el componente si quiere
+      // 403 Forbidden: Usuario autenticado pero sin permisos
+      if (error.status === 403) {
+        console.warn(`${LOG_PREFIX} ❌ Acceso denegado (403) en ${urlPath}`);
+      }
+
+      // Error de red o CORS
+      if (error.status === 0) {
+        console.error(`${LOG_PREFIX} ❌ Error de red/CORS en ${urlPath}:`, error);
+      }
+
       return throwError(() => error);
     })
   );
 };
+
+/**
+ * Añade el token Bearer al header Authorization.
+ */
+function addTokenToRequest(req: HttpRequest<unknown>, token: string): HttpRequest<unknown> {
+  return req.clone({
+    setHeaders: {
+      Authorization: `Bearer ${token}`
+    }
+  });
+}
+
+/**
+ * Verifica si la URL es un endpoint de autenticación que no necesita token.
+ */
+function isAuthEndpoint(url: string): boolean {
+  // Solo estos endpoints no necesitan Bearer token
+  // /status y /refresh SÍ necesitan token
+  const authEndpoints = [
+    '/api/auth/exchange',
+    '/api/auth/login'
+  ];
+  return authEndpoints.some(endpoint => url.includes(endpoint));
+}
+
+/**
+ * Maneja errores 401 con refresh automático y retry de la petición.
+ */
+function handle401Error(
+  req: HttpRequest<unknown>,
+  next: HttpHandlerFn,
+  router: Router,
+  authService: AuthService
+): Observable<any> {
+
+  const urlPath = new URL(req.url, window.location.origin).pathname;
+
+  if (!isRefreshing) {
+    isRefreshing = true;
+    refreshTokenSubject.next(null);
+
+    console.log(`${LOG_PREFIX} 🔃 Iniciando refresh reactivo por 401 en ${urlPath}`);
+
+    return authService.refreshToken().pipe(
+      switchMap(response => {
+        isRefreshing = false;
+        refreshTokenSubject.next(response.accessToken);
+
+        console.log(`${LOG_PREFIX} ✅ Refresh exitoso, reintentando petición original: ${urlPath}`);
+        // Reintentar la petición original con el nuevo token
+        return next(addTokenToRequest(req, response.accessToken));
+      }),
+      catchError(err => {
+        isRefreshing = false;
+        refreshTokenSubject.next(null);
+
+        // Refresh falló, redirigir a login
+        console.warn(`${LOG_PREFIX} ❌ Refresh falló, redirigiendo a /login`);
+        router.navigate(['/login']);
+
+        return throwError(() => err);
+      })
+    );
+  }
+
+  // Ya hay un refresh en progreso, esperar a que termine
+  console.log(`${LOG_PREFIX} ⏳ Refresh ya en progreso, esperando para ${urlPath}...`);
+  return refreshTokenSubject.pipe(
+    filter(token => token !== null),
+    take(1),
+    switchMap(token => {
+      console.log(`${LOG_PREFIX} ✅ Refresh completado, reintentando: ${urlPath}`);
+      return next(addTokenToRequest(req, token!));
+    })
+  );
+}

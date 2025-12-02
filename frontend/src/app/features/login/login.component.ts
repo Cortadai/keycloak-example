@@ -23,7 +23,7 @@ import { AuthService } from '../../core/services/auth.service';
         </div>
 
         <h1>Keycloak Spring Demo</h1>
-        <p class="subtitle">Patrón BFF con Cookies HttpOnly</p>
+        <p class="subtitle">Patrón BFF con JWT en Headers + Redis</p>
 
         <button class="login-button" (click)="login()">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -36,7 +36,7 @@ import { AuthService } from '../../core/services/auth.service';
 
         <div class="info">
           <p>Al hacer click, serás redirigido a Keycloak para autenticarte de forma segura.</p>
-          <p class="security-note">🔒 Tu token JWT nunca es expuesto al JavaScript. Se almacena de forma segura en cookies HttpOnly.</p>
+          <p class="security-note">🔒 El Access Token se almacena en localStorage. El Refresh Token permanece seguro en Redis (nunca llega al navegador).</p>
         </div>
       </div>
     </div>

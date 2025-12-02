@@ -1,7 +1,15 @@
 package com.example.keycloak.controller;
 
-import jakarta.servlet.http.Cookie;
-import jakarta.servlet.http.HttpServletRequest;
+import com.example.keycloak.dto.AuthStatusResponse;
+import com.example.keycloak.dto.ExchangeRequest;
+import com.example.keycloak.dto.LogoutResponse;
+import com.example.keycloak.dto.TokenResponse;
+import com.example.keycloak.model.TokenData;
+import com.example.keycloak.service.KeycloakTokenService;
+import com.example.keycloak.service.TokenService;
+import com.nimbusds.jwt.JWT;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.JWTParser;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,26 +18,22 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.client.registration.ClientRegistration;
-import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
-import org.springframework.security.web.authentication.logout.SecurityContextLogoutHandler;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
-import java.util.HashMap;
-import java.util.Map;
+import java.text.ParseException;
+import java.util.Optional;
 
 /**
- * Controlador para gestionar la autenticación en el patrón BFF.
+ * Controlador para gestionar la autenticación en el patrón BFF con Headers.
  *
- * Este controlador proporciona los endpoints necesarios para que
- * Angular gestione la autenticación sin exponer el JWT:
- *
- * - /api/auth/login  → Inicia el flujo OAuth2 con Keycloak
- * - /api/auth/logout → Cierra sesión e invalida la cookie
- * - /api/auth/status → Verifica si hay una sesión activa
- *
- * Estos endpoints son la capa BFF que protege el JWT del frontend.
+ * Endpoints:
+ * - GET  /api/auth/login    → Inicia flujo OAuth2 con Keycloak
+ * - POST /api/auth/exchange → Intercambia código temporal por accessToken
+ * - POST /api/auth/refresh  → Renueva accessToken usando refreshToken de Redis
+ * - POST /api/auth/logout   → Cierra sesión, revoca tokens
+ * - GET  /api/auth/status   → Verifica validez del Bearer token
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -37,171 +41,283 @@ public class AuthController {
 
     private static final Logger logger = LoggerFactory.getLogger(AuthController.class);
 
+    private final TokenService tokenService;
+    private final KeycloakTokenService keycloakTokenService;
+
     @Value("${app.frontend.url:http://localhost:4200}")
     private String frontendUrl;
 
-    private final ClientRegistrationRepository clientRegistrationRepository;
-
-    public AuthController(ClientRegistrationRepository clientRegistrationRepository) {
-        this.clientRegistrationRepository = clientRegistrationRepository;
+    public AuthController(TokenService tokenService, KeycloakTokenService keycloakTokenService) {
+        this.tokenService = tokenService;
+        this.keycloakTokenService = keycloakTokenService;
     }
 
     /**
      * Inicia el flujo de autenticación OAuth2 con Keycloak.
-     *
-     * Cuando Angular llama a este endpoint, Spring Security automáticamente:
-     * 1. Redirige al usuario a la página de login de Keycloak
-     * 2. El usuario se autentica en Keycloak
-     * 3. Keycloak redirige de vuelta con un authorization code
-     * 4. Spring Boot intercambia el code por un JWT
-     * 5. OAuth2LoginSuccessHandler crea la cookie HttpOnly
-     * 6. Redirige al usuario a Angular /dashboard
-     *
-     * GET http://localhost:8081/api/auth/login
-     *
-     * Respuesta: Redirect 302 a Keycloak
+     * Redirige al endpoint de Spring Security que maneja OAuth2.
      */
     @GetMapping("/login")
     public void login(HttpServletResponse response) throws IOException {
-        logger.info("Iniciando flujo de login OAuth2");
-
-        // Spring Security se encarga automáticamente de la redirección
-        // Solo necesitamos redirigir al endpoint de OAuth2
+        logger.info("═══════════════════════════════════════════════════════════════");
+        logger.info("🚀 [AUTH FLOW] PASO 1: Iniciando flujo OAuth2");
+        logger.info("   → Redirigiendo a: /oauth2/authorization/keycloak");
+        logger.info("   → Spring Security manejará el redirect a Keycloak");
+        logger.info("═══════════════════════════════════════════════════════════════");
         response.sendRedirect("/oauth2/authorization/keycloak");
+    }
+
+    /**
+     * Intercambia un código temporal por el accessToken.
+     *
+     * Este endpoint es llamado por el frontend después de recibir
+     * el código temporal en el callback (/callback?code=xxx).
+     *
+     * El código temporal:
+     * - Tiene TTL de 30 segundos
+     * - Solo se puede usar una vez (se elimina de Redis)
+     * - Contiene accessToken, refreshToken y userId
+     *
+     * @param request DTO con el código temporal
+     * @return accessToken y expiresIn
+     */
+    @PostMapping("/exchange")
+    public ResponseEntity<?> exchangeCode(@RequestBody ExchangeRequest request) {
+        String code = request.getCode();
+
+        logger.info("═══════════════════════════════════════════════════════════════");
+        logger.info("🔄 [AUTH FLOW] PASO 4: Intercambiando código temporal por JWT");
+        logger.info("   → Código recibido: {}...", code != null ? code.substring(0, Math.min(8, code.length())) : "null");
+
+        if (code == null || code.isBlank()) {
+            logger.warn("   ❌ Código vacío o nulo");
+            logger.info("═══════════════════════════════════════════════════════════════");
+            return ResponseEntity.badRequest()
+                    .body(new LogoutResponse(false, "Código temporal requerido"));
+        }
+
+        logger.info("   → Buscando código en Redis...");
+        Optional<TokenData> tokenDataOpt = tokenService.exchangeTempCode(code);
+
+        if (tokenDataOpt.isEmpty()) {
+            logger.warn("   ❌ Código no encontrado en Redis (expirado o ya usado)");
+            logger.info("═══════════════════════════════════════════════════════════════");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new LogoutResponse(false, "Código temporal inválido o expirado"));
+        }
+
+        TokenData tokenData = tokenDataOpt.get();
+        logger.info("   ✅ Código válido encontrado");
+        logger.info("   → UserId: {}", tokenData.getUserId());
+        logger.info("   → AccessToken: {}...", tokenData.getAccessToken().substring(0, 20));
+        logger.info("   → ExpiresIn: {} segundos", tokenData.getExpiresIn());
+
+        // Almacenar refresh token en Redis para este usuario
+        if (tokenData.getRefreshToken() != null) {
+            logger.info("   → Almacenando RefreshToken en Redis para usuario: {}", tokenData.getUserId());
+            tokenService.storeRefreshToken(tokenData.getUserId(), tokenData.getRefreshToken());
+            logger.info("   ✅ RefreshToken almacenado (TTL: 8 horas)");
+        }
+
+        // Devolver solo el accessToken (nunca el refreshToken)
+        TokenResponse response = new TokenResponse(
+                tokenData.getAccessToken(),
+                tokenData.getExpiresIn()
+        );
+
+        logger.info("   🎉 Intercambio completado exitosamente");
+        logger.info("   → Frontend recibirá: accessToken + expiresIn");
+        logger.info("   → RefreshToken: NUNCA se envía al frontend (seguro en Redis)");
+        logger.info("═══════════════════════════════════════════════════════════════");
+        return ResponseEntity.ok(response);
+    }
+
+    /**
+     * Renueva el accessToken usando el refreshToken almacenado en Redis.
+     *
+     * El frontend envía el token expirado en el header Authorization.
+     * El backend:
+     * 1. Valida la firma del JWT (ignora expiración)
+     * 2. Extrae el userId del claim 'sub'
+     * 3. Busca el refreshToken en Redis
+     * 4. Llama a Keycloak para obtener nuevos tokens
+     * 5. Actualiza el refreshToken en Redis
+     * 6. Devuelve el nuevo accessToken
+     */
+    @PostMapping("/refresh")
+    public ResponseEntity<?> refreshToken(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        logger.info("═══════════════════════════════════════════════════════════════");
+        logger.info("🔃 [AUTH FLOW] Refresh de Token solicitado");
+
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            logger.warn("   ❌ No se recibió header Authorization");
+            logger.info("═══════════════════════════════════════════════════════════════");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new LogoutResponse(false, "Token requerido para refresh"));
+        }
+
+        String expiredToken = authHeader.substring(7);
+        logger.info("   → Token recibido: {}...", expiredToken.substring(0, Math.min(20, expiredToken.length())));
+
+        // Extraer userId del token (validar firma, ignorar expiración)
+        String userId;
+        try {
+            userId = extractUserIdFromToken(expiredToken);
+            logger.info("   → UserId extraído del token: {}", userId);
+        } catch (Exception e) {
+            logger.warn("   ❌ Error extrayendo userId: {}", e.getMessage());
+            logger.info("═══════════════════════════════════════════════════════════════");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new LogoutResponse(false, "Token inválido"));
+        }
+
+        // Buscar refresh token en Redis
+        logger.info("   → Buscando RefreshToken en Redis para userId: {}", userId);
+        Optional<String> refreshTokenOpt = tokenService.getRefreshToken(userId);
+
+        if (refreshTokenOpt.isEmpty()) {
+            logger.warn("   ❌ No hay RefreshToken en Redis (sesión no existe o expiró)");
+            logger.info("═══════════════════════════════════════════════════════════════");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new LogoutResponse(false, "Sesión expirada, inicie sesión nuevamente"));
+        }
+
+        logger.info("   ✅ RefreshToken encontrado en Redis");
+        logger.info("   → Solicitando nuevo AccessToken a Keycloak...");
+
+        // Llamar a Keycloak para refrescar el token
+        Optional<TokenResponse> newTokenOpt = keycloakTokenService.refreshAccessToken(refreshTokenOpt.get());
+
+        if (newTokenOpt.isEmpty()) {
+            // El refresh token fue revocado o expiró en Keycloak
+            tokenService.deleteRefreshToken(userId);
+            logger.warn("   ❌ Keycloak rechazó el RefreshToken (revocado o expirado)");
+            logger.info("   → RefreshToken eliminado de Redis");
+            logger.info("═══════════════════════════════════════════════════════════════");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new LogoutResponse(false, "Sesión expirada, inicie sesión nuevamente"));
+        }
+
+        TokenResponse newToken = newTokenOpt.get();
+        logger.info("   ✅ Keycloak devolvió nuevo AccessToken");
+
+        // Actualizar refresh token en Redis si Keycloak devolvió uno nuevo
+        if (newToken.getNewRefreshToken() != null) {
+            tokenService.storeRefreshToken(userId, newToken.getNewRefreshToken());
+            logger.info("   → Nuevo RefreshToken almacenado en Redis");
+        }
+
+        logger.info("   🎉 Refresh completado exitosamente para usuario: {}", userId);
+        logger.info("═══════════════════════════════════════════════════════════════");
+        return ResponseEntity.ok(new TokenResponse(newToken.getAccessToken(), newToken.getExpiresIn()));
     }
 
     /**
      * Cierra la sesión del usuario.
      *
-     * Este endpoint:
-     * 1. Invalida la cookie ACCESS_TOKEN
-     * 2. Limpia el SecurityContext de Spring Security
-     * 3. (Opcional) Revoca el token en Keycloak
-     *
-     * Llamada desde Angular:
-     * POST http://localhost:8081/api/auth/logout
-     * (con credentials para enviar la cookie)
-     *
-     * @param request La petición HTTP
-     * @param response La respuesta HTTP
-     * @return Mensaje de confirmación
+     * 1. Extrae userId del token
+     * 2. Obtiene refresh token de Redis
+     * 3. Revoca el token en Keycloak (opcional)
+     * 4. Elimina refresh token de Redis
      */
     @PostMapping("/logout")
-    public ResponseEntity<Map<String, String>> logout(HttpServletRequest request,
-                                                       HttpServletResponse response) {
-        logger.info("Procesando logout de usuario");
+    public ResponseEntity<LogoutResponse> logout(@RequestHeader(value = "Authorization", required = false) String authHeader) {
+        logger.info("═══════════════════════════════════════════════════════════════");
+        logger.info("🚪 [AUTH FLOW] Logout solicitado");
 
-        // Obtener la autenticación actual
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-
-        if (authentication != null) {
-            // Limpiar el contexto de seguridad
-            new SecurityContextLogoutHandler().logout(request, response, authentication);
-            logger.info("SecurityContext limpiado para usuario: " + authentication.getName());
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            logger.info("   → No hay token, logout considerado exitoso");
+            logger.info("═══════════════════════════════════════════════════════════════");
+            return ResponseEntity.ok(new LogoutResponse(true, "Logout exitoso"));
         }
 
-        // Invalidar la cookie creando una nueva con MaxAge=0
-        Cookie cookie = new Cookie("ACCESS_TOKEN", null);
-        cookie.setPath("/");
-        cookie.setHttpOnly(true);
-        cookie.setMaxAge(0); // Expira inmediatamente
-        response.addCookie(cookie);
+        String token = authHeader.substring(7);
 
-        logger.info("Cookie ACCESS_TOKEN invalidada");
+        try {
+            String userId = extractUserIdFromToken(token);
+            logger.info("   → UserId: {}", userId);
 
-        Map<String, String> responseBody = new HashMap<>();
-        responseBody.put("message", "Logout exitoso");
-        responseBody.put("redirect", frontendUrl + "/login");
+            // Obtener refresh token para revocarlo en Keycloak
+            Optional<String> refreshTokenOpt = tokenService.getRefreshToken(userId);
 
-        return ResponseEntity.ok(responseBody);
+            if (refreshTokenOpt.isPresent()) {
+                logger.info("   → Revocando token en Keycloak...");
+                keycloakTokenService.revokeToken(refreshTokenOpt.get());
+                logger.info("   ✅ Token revocado en Keycloak");
+
+                logger.info("   → Eliminando RefreshToken de Redis...");
+                tokenService.deleteRefreshToken(userId);
+                logger.info("   ✅ RefreshToken eliminado de Redis");
+
+                logger.info("   🎉 Logout completo para usuario: {}", userId);
+            } else {
+                logger.info("   → No había RefreshToken en Redis (ya estaba deslogueado)");
+            }
+
+        } catch (Exception e) {
+            logger.warn("   ⚠️ Error durante logout: {}", e.getMessage());
+            logger.info("   → El frontend limpiará su estado local de todas formas");
+        }
+
+        logger.info("═══════════════════════════════════════════════════════════════");
+        return ResponseEntity.ok(new LogoutResponse(true, "Logout exitoso"));
     }
 
     /**
-     * Verifica si el usuario tiene una sesión activa.
+     * Verifica si el Bearer token es válido.
      *
-     * Angular llama a este endpoint para saber si debe mostrar
-     * contenido autenticado o redirigir al login.
-     *
-     * GET http://localhost:8081/api/auth/status
-     * (con credentials para enviar la cookie)
-     *
-     * @return Estado de la autenticación
+     * Si el token está en el header y es válido, Spring Security
+     * ya lo habrá autenticado antes de llegar aquí.
      */
     @GetMapping("/status")
-    public ResponseEntity<Map<String, Object>> getAuthStatus() {
+    public ResponseEntity<AuthStatusResponse> getAuthStatus(
+            @RequestHeader(value = "Authorization", required = false) String authHeader) {
+
+        logger.info("───────────────────────────────────────────────────────────────");
+        logger.info("🔍 [AUTH STATUS] Verificación de token");
+
+        // Si hay un token válido, Spring Security ya lo procesó
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
 
-        Map<String, Object> response = new HashMap<>();
-
         if (authentication != null && authentication.isAuthenticated()
-                && !authentication.getName().equals("anonymousUser")) {
+                && authentication.getPrincipal() instanceof Jwt) {
 
-            response.put("authenticated", true);
-            response.put("username", authentication.getName());
-            response.put("authorities", authentication.getAuthorities());
+            Jwt jwt = (Jwt) authentication.getPrincipal();
+            String username = jwt.getClaimAsString("preferred_username");
+            String userId = jwt.getSubject();
 
-            logger.debug("Usuario autenticado: " + authentication.getName());
-            return ResponseEntity.ok(response);
+            logger.info("   ✅ Token VÁLIDO");
+            logger.info("   → Username: {}", username);
+            logger.info("   → UserId: {}", userId);
+            logger.info("   → Expira: {}", jwt.getExpiresAt());
+            logger.info("───────────────────────────────────────────────────────────────");
+            return ResponseEntity.ok(new AuthStatusResponse(true, username, "Token válido"));
         }
 
-        response.put("authenticated", false);
-        response.put("message", "No hay sesión activa");
+        // También verificar si el header tiene un token que podemos validar manualmente
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            logger.warn("   ❌ Token presente pero NO válido (Spring Security lo rechazó)");
+        } else {
+            logger.info("   → No se recibió token en el header");
+        }
 
-        return ResponseEntity.ok(response);
+        logger.info("───────────────────────────────────────────────────────────────");
+        return ResponseEntity.ok(new AuthStatusResponse(false, null, "No autenticado"));
     }
 
     /**
-     * Endpoint opcional para obtener la URL de logout de Keycloak.
-     *
-     * Permite hacer un "logout global" que cierra sesión en Keycloak
-     * (SSO logout - cierra sesión en todas las aplicaciones).
-     *
-     * GET http://localhost:8081/api/auth/logout-url
-     *
-     * @return URL de logout de Keycloak
+     * Extrae el userId (claim 'sub') de un JWT.
+     * Valida la firma pero permite tokens expirados (para refresh).
      */
-    @GetMapping("/logout-url")
-    public ResponseEntity<Map<String, String>> getLogoutUrl() {
-        try {
-            ClientRegistration clientRegistration =
-                    clientRegistrationRepository.findByRegistrationId("keycloak");
+    private String extractUserIdFromToken(String token) throws ParseException {
+        // Usar nimbus-jose-jwt para parsear sin validar expiración
+        JWT jwt = JWTParser.parse(token);
+        JWTClaimsSet claims = jwt.getJWTClaimsSet();
 
-            if (clientRegistration != null) {
-                String logoutUrl = clientRegistration
-                        .getProviderDetails()
-                        .getConfigurationMetadata()
-                        .get("end_session_endpoint")
-                        .toString();
-
-                // Añadir redirect después del logout
-                String fullLogoutUrl = logoutUrl +
-                        "?post_logout_redirect_uri=" + frontendUrl +
-                        "&client_id=" + clientRegistration.getClientId();
-
-                Map<String, String> response = new HashMap<>();
-                response.put("logoutUrl", fullLogoutUrl);
-
-                return ResponseEntity.ok(response);
-            }
-        } catch (Exception e) {
-            logger.error("Error obteniendo URL de logout de Keycloak", e);
+        String subject = claims.getSubject();
+        if (subject == null || subject.isBlank()) {
+            throw new IllegalArgumentException("Token sin claim 'sub'");
         }
 
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Map.of("error", "No se pudo obtener la URL de logout"));
-    }
-
-    /**
-     * Endpoint de callback después del login (opcional).
-     *
-     * Este endpoint puede ser útil para logging o analytics.
-     * El OAuth2LoginSuccessHandler ya maneja la redirección,
-     * pero este endpoint queda disponible si se necesita.
-     */
-    @GetMapping("/callback")
-    public void loginCallback(HttpServletResponse response) throws IOException {
-        logger.info("Callback de login recibido");
-        // Redirigir al dashboard (ya con cookie creada por el handler)
-        response.sendRedirect(frontendUrl + "/dashboard");
+        return subject;
     }
 }
