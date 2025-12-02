@@ -22,7 +22,7 @@ spring:
         registration:
           keycloak:
             client-id: spring-boot-client
-            client-secret: fzmAdt2kAN6QOYWzD7lFkM6CxTsl8W5h
+            client-secret: tu-secreto-de-cliente-de-prueba
             authorization-grant-type: authorization_code
             redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
             scope:
