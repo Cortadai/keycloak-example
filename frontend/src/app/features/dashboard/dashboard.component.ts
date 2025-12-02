@@ -93,13 +93,15 @@ import { User } from '../../core/models/user.model';
           </div>
 
           <div class="security-info">
-            <h3>🔒 Información de Seguridad BFF</h3>
+            <h3>🔒 Seguridad BFF con Binding (Llave Partida)</h3>
             <ul>
-              <li>Access Token en localStorage + header Authorization Bearer</li>
+              <li><strong>JWT con fingerprint</strong> en localStorage + header Authorization Bearer</li>
+              <li><strong>Cookie HttpOnly</strong> con hash SHA-256 del fingerprint (viaja automáticamente)</li>
+              <li><strong>Binding</strong>: Ambos (JWT + Cookie) son necesarios para autenticarse</li>
+              <li><strong>Protección XSS</strong>: Atacante roba JWT pero NO tiene cookie → BLOQUEADO</li>
+              <li><strong>Protección CSRF</strong>: Atacante tiene cookie pero NO puede leer JWT → BLOQUEADO</li>
               <li>Refresh Token seguro en Redis (nunca expuesto al frontend)</li>
-              <li>Refresh proactivo antes de expirar + reactivo en 401</li>
-              <li>Sesión única por usuario (nuevo login invalida el anterior)</li>
-              <li>Autenticación OAuth2 gestionada por Keycloak</li>
+              <li>Rotación de fingerprint en cada refresh (seguridad adicional)</li>
             </ul>
           </div>
         }

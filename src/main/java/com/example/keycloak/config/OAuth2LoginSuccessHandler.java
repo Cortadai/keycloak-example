@@ -18,8 +18,15 @@ import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.web.authentication.SimpleUrlAuthenticationSuccessHandler;
 import org.springframework.stereotype.Component;
 
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.io.IOException;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Handler que se ejecuta después de un login exitoso con OAuth2.
@@ -101,22 +108,34 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
         log.info("      • AccessToken: {}...", accessToken.getTokenValue().substring(0, 20));
         log.info("      • RefreshToken: {}", refreshToken != null ? "presente" : "no proporcionado");
 
-        // Extraer userId del principal (claim 'sub')
+        // Extraer información del usuario del Access Token de Keycloak
         String userId = extractUserId(oauth2Token);
+        String username = extractUsername(oauth2Token);
+        String email = extractEmail(oauth2Token);
+        String name = extractNameFromAccessToken(accessToken.getTokenValue());
+        // Extraer roles del Access Token de Keycloak (no del ID Token)
+        List<String> roles = extractRolesFromAccessToken(accessToken.getTokenValue());
 
         // Calcular expiresIn
         long expiresIn = calculateExpiresIn(accessToken);
 
         log.info("   → UserId (sub claim): {}", userId);
+        log.info("   → Username: {}", username);
+        log.info("   → Email: {}", email);
+        log.info("   → Name: {}", name);
+        log.info("   → Roles: {}", roles);
         log.info("   → Token expira en: {} segundos", expiresIn);
 
-        // Crear datos del token para Redis
-        TokenData tokenData = new TokenData(
-                accessToken.getTokenValue(),
-                refreshToken != null ? refreshToken.getTokenValue() : null,
-                userId,
-                expiresIn
-        );
+        // Crear datos del token para Redis (incluye info para JWT propio)
+        TokenData tokenData = new TokenData();
+        tokenData.setAccessToken(accessToken.getTokenValue());
+        tokenData.setRefreshToken(refreshToken != null ? refreshToken.getTokenValue() : null);
+        tokenData.setUserId(userId);
+        tokenData.setExpiresIn(expiresIn);
+        tokenData.setUsername(username);
+        tokenData.setEmail(email);
+        tokenData.setName(name);
+        tokenData.setRoles(roles);
 
         // Generar código temporal y almacenar en Redis (TTL 30s)
         log.info("═══════════════════════════════════════════════════════════════");
@@ -147,6 +166,121 @@ public class OAuth2LoginSuccessHandler extends SimpleUrlAuthenticationSuccessHan
 
         // Fallback al nombre de la autenticación
         return oauth2Token.getName();
+    }
+
+    /**
+     * Extrae el username (preferred_username) del token.
+     */
+    private String extractUsername(OAuth2AuthenticationToken oauth2Token) {
+        Object principal = oauth2Token.getPrincipal();
+
+        if (principal instanceof OidcUser oidcUser) {
+            String username = oidcUser.getPreferredUsername();
+            if (username != null) {
+                return username;
+            }
+        }
+
+        return oauth2Token.getName();
+    }
+
+    /**
+     * Extrae el email del token.
+     */
+    private String extractEmail(OAuth2AuthenticationToken oauth2Token) {
+        Object principal = oauth2Token.getPrincipal();
+
+        if (principal instanceof OidcUser oidcUser) {
+            return oidcUser.getEmail();
+        }
+
+        return null;
+    }
+
+    /**
+     * Extrae el nombre completo (name) decodificando el Access Token de Keycloak.
+     *
+     * @param accessTokenValue El valor del access token JWT
+     * @return Nombre completo del usuario o null si no existe
+     */
+    private String extractNameFromAccessToken(String accessTokenValue) {
+        try {
+            String[] parts = accessTokenValue.split("\\.");
+            if (parts.length != 3) {
+                return null;
+            }
+
+            String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, Object> claims = mapper.readValue(payload, new TypeReference<Map<String, Object>>() {});
+
+            return (String) claims.get("name");
+        } catch (Exception e) {
+            log.warn("   ⚠️ Error extrayendo name del Access Token: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extrae los roles decodificando el Access Token de Keycloak (JWT).
+     * El Access Token contiene realm_access.roles y resource_access.{client}.roles
+     * que NO están presentes en el ID Token por defecto.
+     *
+     * @param accessTokenValue El valor del access token JWT
+     * @return Lista de roles extraídos
+     */
+    @SuppressWarnings("unchecked")
+    private List<String> extractRolesFromAccessToken(String accessTokenValue) {
+        List<String> roles = new ArrayList<>();
+
+        try {
+            // El JWT tiene 3 partes separadas por punto: header.payload.signature
+            String[] parts = accessTokenValue.split("\\.");
+            if (parts.length != 3) {
+                log.warn("   ⚠️ Access Token no tiene formato JWT válido");
+                return roles;
+            }
+
+            // Decodificar el payload (segunda parte)
+            String payload = new String(Base64.getUrlDecoder().decode(parts[1]));
+            ObjectMapper mapper = new ObjectMapper();
+            Map<String, Object> claims = mapper.readValue(payload, new TypeReference<Map<String, Object>>() {});
+
+            log.debug("   → Claims del Access Token: {}", claims.keySet());
+
+            // Extraer roles del realm (realm_access.roles)
+            Map<String, Object> realmAccess = (Map<String, Object>) claims.get("realm_access");
+            if (realmAccess != null && realmAccess.get("roles") != null) {
+                List<String> realmRoles = (List<String>) realmAccess.get("roles");
+                // Filtrar roles internos de Keycloak
+                realmRoles.stream()
+                        .filter(role -> !role.startsWith("default-roles-"))
+                        .filter(role -> !role.equals("offline_access"))
+                        .filter(role -> !role.equals("uma_authorization"))
+                        .forEach(roles::add);
+                log.debug("   → Roles del realm: {}", realmRoles);
+            }
+
+            // Extraer roles del cliente (resource_access.{client}.roles)
+            Map<String, Object> resourceAccess = (Map<String, Object>) claims.get("resource_access");
+            if (resourceAccess != null) {
+                for (Map.Entry<String, Object> entry : resourceAccess.entrySet()) {
+                    if (entry.getValue() instanceof Map) {
+                        Map<String, Object> clientAccess = (Map<String, Object>) entry.getValue();
+                        if (clientAccess.get("roles") instanceof List) {
+                            List<String> clientRoles = (List<String>) clientAccess.get("roles");
+                            roles.addAll(clientRoles);
+                            log.debug("   → Roles del cliente '{}': {}", entry.getKey(), clientRoles);
+                        }
+                    }
+                }
+            }
+
+        } catch (Exception e) {
+            log.error("   ❌ Error decodificando Access Token para extraer roles: {}", e.getMessage());
+        }
+
+        return roles;
     }
 
     /**

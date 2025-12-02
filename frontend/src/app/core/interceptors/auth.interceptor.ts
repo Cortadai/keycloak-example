@@ -16,12 +16,18 @@ let isRefreshing = false;
 const refreshTokenSubject: BehaviorSubject<string | null> = new BehaviorSubject<string | null>(null);
 
 /**
- * Interceptor HTTP para el patrón BFF con Bearer tokens.
+ * Interceptor HTTP para el patrón BFF con Binding (JWT + Cookie).
  *
  * Responsabilidades:
  * 1. Añadir header Authorization: Bearer {token} a todas las peticiones
- * 2. Manejar errores 401 con refresh automático y retry
- * 3. Redirigir al login si el refresh falla
+ * 2. Añadir withCredentials: true para que las cookies viajen automáticamente
+ * 3. Manejar errores 401 con refresh automático y retry
+ * 4. Redirigir al login si el refresh falla
+ *
+ * El binding funciona así:
+ * - JWT en localStorage → se añade como header Authorization
+ * - Cookie HttpOnly con hash del fingerprint → viaja automáticamente con withCredentials
+ * - Ambos son necesarios para autenticarse (protección XSS + CSRF)
  *
  * Estrategia de refresh:
  * - Proactivo: Timer en AuthService (antes de expirar)
@@ -34,9 +40,12 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   // Extraer la parte final de la URL para logs más legibles
   const urlPath = new URL(req.url, window.location.origin).pathname;
 
-  // No añadir token a endpoints públicos de auth (exchange, refresh)
+  // SIEMPRE añadir withCredentials para que las cookies viajen (binding)
+  req = req.clone({ withCredentials: true });
+
+  // No añadir token a endpoints públicos de auth (exchange)
   if (isAuthEndpoint(req.url)) {
-    console.log(`${LOG_PREFIX} ${req.method} ${urlPath} (sin token - endpoint público)`);
+    console.log(`${LOG_PREFIX} ${req.method} ${urlPath} (sin token - endpoint público, con credentials)`);
     return next(req);
   }
 
@@ -46,7 +55,8 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
   // Si hay token, añadirlo al header
   if (token) {
     console.log(`${LOG_PREFIX} ${req.method} ${urlPath}`);
-    console.log(`   → Añadiendo header: Authorization: Bearer ${token.substring(0, 15)}...`);
+    console.log(`   → Header: Authorization: Bearer ${token.substring(0, 15)}...`);
+    console.log(`   → Cookie: Fingerprint (automática con credentials)`);
     req = addTokenToRequest(req, token);
   } else {
     console.log(`${LOG_PREFIX} ${req.method} ${urlPath} (sin token en localStorage)`);
@@ -77,9 +87,11 @@ export const authInterceptor: HttpInterceptorFn = (req, next) => {
 
 /**
  * Añade el token Bearer al header Authorization.
+ * Mantiene withCredentials para que las cookies sigan viajando.
  */
 function addTokenToRequest(req: HttpRequest<unknown>, token: string): HttpRequest<unknown> {
   return req.clone({
+    withCredentials: true,
     setHeaders: {
       Authorization: `Bearer ${token}`
     }

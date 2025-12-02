@@ -7,7 +7,11 @@ import { AuthService } from '../../core/services/auth.service';
  * Pantalla simple con un botón para iniciar el flujo OAuth2 con Keycloak.
  *
  * No hay formularios de login porque la autenticación se hace
- * completamente en Keycloak (patrón BFF).
+ * completamente en Keycloak (patrón BFF con Binding).
+ *
+ * El patrón Binding (Llave Partida) protege contra:
+ * - XSS: El atacante puede robar el JWT pero NO la cookie HttpOnly
+ * - CSRF: El atacante tiene la cookie pero NO puede leer el JWT
  */
 @Component({
   selector: 'app-login',
@@ -23,7 +27,7 @@ import { AuthService } from '../../core/services/auth.service';
         </div>
 
         <h1>Keycloak Spring Demo</h1>
-        <p class="subtitle">Patrón BFF con JWT en Headers + Redis</p>
+        <p class="subtitle">Patrón BFF con Binding (JWT + Cookie HttpOnly)</p>
 
         <button class="login-button" (click)="login()">
           <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -36,7 +40,7 @@ import { AuthService } from '../../core/services/auth.service';
 
         <div class="info">
           <p>Al hacer click, serás redirigido a Keycloak para autenticarte de forma segura.</p>
-          <p class="security-note">🔒 El Access Token se almacena en localStorage. El Refresh Token permanece seguro en Redis (nunca llega al navegador).</p>
+          <p class="security-note">🔒 Seguridad "Llave Partida": JWT en localStorage + Cookie HttpOnly con fingerprint. Ambos son necesarios para autenticarse. El Refresh Token permanece seguro en Redis.</p>
         </div>
       </div>
     </div>

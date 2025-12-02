@@ -1,15 +1,16 @@
-# Backend - Spring Boot BFF con JWT Headers + Redis
+# Backend - Spring Boot BFF con Binding (JWT + Cookie HttpOnly)
 
-Documentación completa del backend implementado con Spring Boot, Spring Security OAuth2 y Redis.
+Documentacion completa del backend implementado con Spring Boot, Spring Security OAuth2 y el patron "Llave Partida".
 
 ---
 
 ## Tabla de Contenidos
 
 - [Arquitectura](#arquitectura)
+- [Patron Llave Partida](#patron-llave-partida)
 - [Componentes Principales](#componentes-principales)
-- [Configuración](#configuración)
-- [Flujo de Autenticación](#flujo-de-autenticación)
+- [Configuracion](#configuracion)
+- [Flujo de Autenticacion](#flujo-de-autenticacion)
 - [Redis Storage](#redis-storage)
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
@@ -18,337 +19,399 @@ Documentación completa del backend implementado con Spring Boot, Spring Securit
 
 ## Arquitectura
 
-### Patrón BFF en el Backend
+### Patron BFF con Binding
 
-El backend implementa el patrón BFF (Backend for Frontend) donde:
+El backend implementa el patron BFF (Backend for Frontend) con **Binding** donde:
 
-1. **Actúa como OAuth2 Client** hacia Keycloak
-2. **Actúa como Resource Server** para validar JWTs
-3. **Gestiona tokens en Redis** (refresh tokens y códigos temporales)
-4. **Valida roles** extraídos de Keycloak
-5. **Protege endpoints** con Spring Security
+1. **Actua como OAuth2 Client** hacia Keycloak
+2. **Genera JWT propio** con claim `fingerprint` (no usa directamente el de Keycloak)
+3. **Gestiona Cookie HttpOnly** con hash SHA-256 del fingerprint
+4. **Valida Binding** en cada peticion (JWT + Cookie deben coincidir)
+5. **Almacena refresh tokens en Redis** (nunca expuestos al frontend)
 6. **Sesiones STATELESS** - no usa sesiones HTTP
 
 ### Diagrama de Componentes
 
 ```
-┌────────────────────────────────────────────────────────────┐
-│              Spring Boot Application                        │
-│                                                            │
-│  ┌──────────────────────────────────────────────────────┐ │
-│  │           SecurityConfig (BFF STATELESS)             │ │
-│  │  • CORS (sin credentials)                            │ │
-│  │  • STATELESS sessions                                │ │
-│  │  • OAuth2 Login + Resource Server (JWT)              │ │
-│  │  • Bearer token authentication                       │ │
-│  └──────────────────────────────────────────────────────┘ │
-│                                                            │
-│  ┌──────────────────────────────────────────────────────┐ │
-│  │         OAuth2LoginSuccessHandler                    │ │
-│  │  • Recibe tokens de Keycloak                         │ │
-│  │  • Genera código temporal (UUID)                     │ │
-│  │  • Almacena en Redis (TTL 30s)                       │ │
-│  │  • Redirige al frontend con código                   │ │
-│  └──────────────────────────────────────────────────────┘ │
-│                                                            │
-│  ┌────────────────────┐    ┌─────────────────────────┐   │
-│  │   TokenService     │    │  KeycloakTokenService   │   │
-│  │  • CRUD Redis      │    │  • Refresh tokens       │   │
-│  │  • Temp codes      │    │  • Revoke tokens        │   │
-│  │  • Refresh tokens  │    │  • Comunicación KC      │   │
-│  └────────────────────┘    └─────────────────────────┘   │
-│                                                            │
-│  ┌──────────────────────────────────────────────────────┐ │
-│  │                   Controllers                        │ │
-│  │  • AuthController (/exchange, /refresh, /logout)     │ │
-│  │  • UserController (@PreAuthorize)                    │ │
-│  │  • AdminController (@PreAuthorize)                   │ │
-│  │  • PublicController                                  │ │
-│  └──────────────────────────────────────────────────────┘ │
-└────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-                    ┌─────────────────┐
-                    │     Redis       │
-                    │  • temp_code:*  │
-                    │  • refresh:*    │
-                    └─────────────────┘
++---------------------------------------------------------------+
+|                Spring Boot Application                         |
+|                                                               |
+|  +----------------------------------------------------------+ |
+|  |              SecurityConfig (BFF + Binding)               | |
+|  |  * CORS con credentials (para cookies)                    | |
+|  |  * STATELESS sessions                                     | |
+|  |  * OAuth2 Login + Resource Server                         | |
+|  |  * Custom JwtDecoder (JWT propio, no Keycloak)            | |
+|  |  * FingerprintValidationFilter                            | |
+|  +----------------------------------------------------------+ |
+|                                                               |
+|  +----------------------------------------------------------+ |
+|  |           FingerprintValidationFilter                     | |
+|  |  * Ejecuta ANTES del filtro JWT                           | |
+|  |  * Extrae fingerprint del JWT                             | |
+|  |  * Extrae hash de la Cookie HttpOnly                      | |
+|  |  * Valida: SHA-256(fingerprint) == cookie                 | |
+|  |  * Si no coincide: 401 Unauthorized                       | |
+|  +----------------------------------------------------------+ |
+|                                                               |
+|  +------------------+    +-----------------------------+     |
+|  | FingerprintService|    |        JwtService           |     |
+|  | * UUID.randomUUID |    | * Genera JWT propio         |     |
+|  | * SHA-256 hash    |    | * Firma con HMAC            |     |
+|  | * validateBinding |    | * Incluye claim fingerprint |     |
+|  +------------------+    +-----------------------------+     |
+|                                                               |
+|  +------------------+    +-----------------------------+     |
+|  |  TokenService    |    |   KeycloakTokenService      |     |
+|  |  * CRUD Redis    |    |   * Refresh tokens          |     |
+|  |  * Temp codes    |    |   * Revoke tokens           |     |
+|  |  * Refresh tokens|    |   * Comunicacion KC         |     |
+|  +------------------+    +-----------------------------+     |
+|                                                               |
+|  +----------------------------------------------------------+ |
+|  |                      Controllers                          | |
+|  |  * AuthController (/exchange, /refresh, /logout)          | |
+|  |  * UserController (@PreAuthorize con roles)               | |
+|  |  * AdminController (@PreAuthorize)                        | |
+|  |  * PublicController                                       | |
+|  +----------------------------------------------------------+ |
++---------------------------------------------------------------+
+                              |
+                              v
+                    +-----------------+
+                    |     Redis       |
+                    | * temp_code:*   |
+                    | * refresh:*     |
+                    +-----------------+
 ```
+
+---
+
+## Patron Llave Partida
+
+### Concepto
+
+El binding requiere **AMBOS** elementos para autenticarse:
+
+```
++-----------------------------------------------------------+
+|                                                           |
+|   JWT en Header         +    Cookie HttpOnly              |
+|   Authorization               Fingerprint                  |
+|                                                           |
+|   claim: fingerprint    ==   valor: SHA-256(fingerprint)  |
+|   valor: "abc123..."         valor: "hash..."             |
+|                                                           |
+|         |                          |                      |
+|         v                          v                      |
+|    localStorage             Cookie Store                  |
+|    (accesible por JS)       (HttpOnly = inaccesible JS)   |
+|                                                           |
+|   ========================================================|
+|                                                           |
+|   XSS roba el JWT    -> No tiene la cookie  -> BLOQUEADO  |
+|   CSRF usa la cookie -> No tiene el JWT     -> BLOQUEADO  |
+|                                                           |
++-----------------------------------------------------------+
+```
+
+### Por que JWT propio (no Keycloak directamente)?
+
+1. **Necesitamos el claim `fingerprint`** - Keycloak no lo tiene
+2. **No podemos modificar un JWT firmado** - Romperia la firma
+3. **Solucion**: Crear JWT nuevo firmado con nuestro secret
 
 ---
 
 ## Componentes Principales
 
-### 1. SecurityConfig.java
+### 1. FingerprintService.java
 
-**Ubicación**: `src/main/java/com/example/keycloak/config/SecurityConfig.java`
-
-**Responsabilidades**:
-- Configuración BFF con sessions STATELESS
-- CORS configurado para Angular (sin credentials)
-- Integración OAuth2 Login + Resource Server
-- Extracción de roles de Keycloak
-
-**Configuración clave**:
-
-```java
-// Session STATELESS - no cookies de sesión
-.sessionManagement(session -> session
-    .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
-)
-
-// CORS sin credentials (Bearer tokens en headers)
-configuration.setAllowCredentials(false);
-
-// OAuth2 Login con handler personalizado
-.oauth2Login(oauth2 -> oauth2
-    .successHandler(oauth2LoginSuccessHandler)
-)
-
-// Resource Server para validar JWT en headers
-.oauth2ResourceServer(oauth2 -> oauth2
-    .jwt(jwt -> jwt
-        .jwtAuthenticationConverter(jwtAuthenticationConverter())
-    )
-)
-```
-
-**Extracción de roles**:
-- **Realm roles**: `realm_access.roles` → `ROLE_USER`, `ROLE_ADMIN`
-- **Client roles**: `resource_access.{client}.roles` → `ROLE_*`
-
----
-
-### 2. OAuth2LoginSuccessHandler.java
-
-**Ubicación**: `src/main/java/com/example/keycloak/config/OAuth2LoginSuccessHandler.java`
+**Ubicacion**: `src/main/java/com/example/keycloak/service/FingerprintService.java`
 
 **Responsabilidades**:
-- Captura tokens después del login exitoso en Keycloak
-- Genera código temporal UUID
-- Almacena tokens en Redis con TTL de 30 segundos
-- Redirige al frontend con el código temporal
-
-**Flujo**:
+- Generar fingerprint aleatorio (UUID)
+- Calcular hash SHA-256
+- Validar binding
 
 ```java
-@Override
-public void onAuthenticationSuccess(HttpServletRequest request,
-                                    HttpServletResponse response,
-                                    Authentication authentication) {
-    // 1. Obtener tokens de Keycloak
-    OAuth2AccessToken accessToken = authorizedClient.getAccessToken();
-    OAuth2RefreshToken refreshToken = authorizedClient.getRefreshToken();
+@Service
+public class FingerprintService {
 
-    // 2. Crear TokenData con toda la info
-    TokenData tokenData = new TokenData(
-        accessToken.getTokenValue(),
-        refreshToken.getTokenValue(),
-        userId,
-        expiresIn
-    );
-
-    // 3. Generar código temporal y guardar en Redis (TTL 30s)
-    String tempCode = tokenService.createTempCode(tokenData);
-
-    // 4. Redirigir al frontend con el código
-    response.sendRedirect(frontendUrl + "/callback?code=" + tempCode);
-}
-```
-
-**¿Por qué código temporal?**
-- El navegador hace un redirect HTTP, no puede recibir JSON
-- El código temporal es de uso único (se elimina al usarse)
-- TTL de 30 segundos previene ataques de replay
-
----
-
-### 3. TokenService.java
-
-**Ubicación**: `src/main/java/com/example/keycloak/service/TokenService.java`
-
-**Responsabilidades**:
-- CRUD de códigos temporales en Redis
-- CRUD de refresh tokens en Redis
-- Gestión de TTLs
-
-**Operaciones principales**:
-
-```java
-// Crear código temporal (TTL 30s)
-public String createTempCode(TokenData tokenData) {
-    String code = UUID.randomUUID().toString();
-    redisTemplate.opsForValue().set(
-        TEMP_CODE_PREFIX + code,
-        tokenData,
-        TEMP_CODE_TTL_SECONDS,
-        TimeUnit.SECONDS
-    );
-    return code;
-}
-
-// Intercambiar código temporal (uso único)
-public Optional<TokenData> exchangeTempCode(String code) {
-    String key = TEMP_CODE_PREFIX + code;
-    TokenData data = (TokenData) redisTemplate.opsForValue().get(key);
-    if (data != null) {
-        redisTemplate.delete(key);  // Eliminar después de usar
-        return Optional.of(data);
+    // Genera fingerprint aleatorio (UUID criptograficamente seguro)
+    public String generateFingerprint() {
+        return UUID.randomUUID().toString();
     }
-    return Optional.empty();
-}
 
-// Almacenar refresh token (TTL 8 horas)
-public void storeRefreshToken(String userId, String refreshToken) {
-    stringRedisTemplate.opsForValue().set(
-        REFRESH_TOKEN_PREFIX + userId,
-        refreshToken,
-        REFRESH_TOKEN_TTL_HOURS,
-        TimeUnit.HOURS
-    );
+    // Calcula hash SHA-256 del fingerprint
+    public String hashFingerprint(String fingerprint) {
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        byte[] hashBytes = digest.digest(fingerprint.getBytes(StandardCharsets.UTF_8));
+        return HexFormat.of().formatHex(hashBytes);
+    }
+
+    // Valida que hash(fingerprint) == expectedHash
+    public boolean validateFingerprint(String fingerprint, String expectedHash) {
+        String calculatedHash = hashFingerprint(fingerprint);
+        return calculatedHash.equals(expectedHash);
+    }
 }
 ```
 
-**Estructura en Redis**:
-- `temp_code:{uuid}` → TokenData (JSON) - TTL 30s
-- `refresh_token:{userId}` → String (JWT) - TTL 8h
-
 ---
 
-### 4. KeycloakTokenService.java
+### 2. JwtService.java
 
-**Ubicación**: `src/main/java/com/example/keycloak/service/KeycloakTokenService.java`
+**Ubicacion**: `src/main/java/com/example/keycloak/service/JwtService.java`
 
 **Responsabilidades**:
-- Comunicación REST con Keycloak
-- Refresh de access tokens
-- Revocación de tokens en logout
+- Generar JWT propio con fingerprint
+- Firmar con HMAC-SHA
+- Extraer claims (incluso de tokens expirados para refresh)
 
 ```java
-// Refresh token con Keycloak
-public Optional<TokenResponse> refreshAccessToken(String refreshToken) {
-    MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
-    body.add("grant_type", "refresh_token");
-    body.add("client_id", clientId);
-    body.add("client_secret", clientSecret);
-    body.add("refresh_token", refreshToken);
+@Service
+public class JwtService {
 
-    ResponseEntity<Map> response = restTemplate.postForEntity(
-        tokenUri,
-        new HttpEntity<>(body, headers),
-        Map.class
-    );
-    // Parsear response y devolver nuevo access token
-}
+    // Genera JWT con claims del usuario + fingerprint
+    public String generateToken(String userId, String username, String email,
+                                 String name, List<String> roles, String fingerprint) {
+        return Jwts.builder()
+                .subject(userId)
+                .claim("preferred_username", username)
+                .claim("email", email)
+                .claim("name", name)
+                .claim("roles", roles)
+                .claim("fingerprint", fingerprint)  // <-- Clave del binding
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + expirationMs))
+                .signWith(signingKey)
+                .compact();
+    }
 
-// Revocar token en Keycloak
-public boolean revokeToken(String refreshToken) {
-    MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
-    body.add("token", refreshToken);
-    body.add("client_id", clientId);
-    body.add("client_secret", clientSecret);
+    // Extrae fingerprint del JWT
+    public String extractFingerprint(String token) {
+        Claims claims = parseClaimsAllowExpired(token);
+        return claims.get("fingerprint", String.class);
+    }
 
-    restTemplate.postForEntity(revokeUri, new HttpEntity<>(body, headers), Void.class);
+    // Permite parsear tokens expirados (necesario para refresh)
+    private Claims parseClaimsAllowExpired(String token) {
+        try {
+            return Jwts.parser().verifyWith(signingKey)
+                    .build().parseSignedClaims(token).getPayload();
+        } catch (ExpiredJwtException e) {
+            return e.getClaims();  // Firma valida, solo expirado
+        }
+    }
 }
 ```
 
 ---
 
-### 5. AuthController.java
+### 3. FingerprintValidationFilter.java
 
-**Ubicación**: `src/main/java/com/example/keycloak/controller/AuthController.java`
+**Ubicacion**: `src/main/java/com/example/keycloak/filter/FingerprintValidationFilter.java`
 
-**Endpoints**:
-
-#### GET `/api/auth/login` (Público)
-Inicia el flujo OAuth2 con Keycloak.
+**Responsabilidades**:
+- Ejecutarse ANTES del filtro JWT de Spring Security
+- Validar binding en cada peticion protegida
+- Rechazar si binding invalido
 
 ```java
-@GetMapping("/login")
-public void login(HttpServletResponse response) throws IOException {
-    response.sendRedirect("/oauth2/authorization/keycloak");
+@Component
+public class FingerprintValidationFilter extends OncePerRequestFilter {
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) {
+
+        // Saltar endpoints publicos
+        if (shouldSkipValidation(path)) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
+        // Extraer fingerprint del JWT
+        String token = extractBearerToken(request);
+        String fingerprint = jwtService.extractFingerprint(token);
+
+        // Extraer hash de la cookie
+        String cookieHash = extractCookieValue(request, "Fingerprint");
+
+        // Validar binding
+        if (!fingerprintService.validateFingerprint(fingerprint, cookieHash)) {
+            // BINDING INVALIDO - posible token robado
+            response.setStatus(401);
+            response.getWriter().write("{\"message\":\"Binding invalido\"}");
+            return;
+        }
+
+        // Binding valido, continuar
+        filterChain.doFilter(request, response);
+    }
 }
 ```
 
-#### POST `/api/auth/exchange` (Público)
-Intercambia código temporal por accessToken.
+---
+
+### 4. AuthController.java
+
+**Ubicacion**: `src/main/java/com/example/keycloak/controller/AuthController.java`
+
+**Endpoints principales**:
+
+#### POST `/api/auth/exchange`
+
+Intercambia codigo temporal por JWT + Cookie.
 
 ```java
 @PostMapping("/exchange")
-public ResponseEntity<?> exchangeCode(@RequestBody ExchangeRequest request) {
-    // 1. Buscar código en Redis
-    Optional<TokenData> tokenDataOpt = tokenService.exchangeTempCode(code);
+public ResponseEntity<?> exchangeCode(@RequestBody ExchangeRequest request,
+                                       HttpServletResponse response) {
+    // 1. Obtener TokenData de Redis
+    TokenData tokenData = tokenService.exchangeTempCode(code);
 
-    // 2. Almacenar refresh token en Redis
-    tokenService.storeRefreshToken(tokenData.getUserId(), tokenData.getRefreshToken());
+    // 2. Generar fingerprint
+    String fingerprint = fingerprintService.generateFingerprint();
+    String fingerprintHash = fingerprintService.hashFingerprint(fingerprint);
 
-    // 3. Devolver solo accessToken (refresh NUNCA sale del backend)
-    return ResponseEntity.ok(new TokenResponse(
-        tokenData.getAccessToken(),
-        tokenData.getExpiresIn()
-    ));
+    // 3. Crear JWT propio CON fingerprint
+    String jwt = jwtService.generateToken(
+        tokenData.getUserId(),
+        tokenData.getUsername(),
+        tokenData.getEmail(),
+        tokenData.getName(),
+        tokenData.getRoles(),
+        fingerprint  // <-- Incluido en JWT
+    );
+
+    // 4. Setear Cookie HttpOnly con hash
+    Cookie cookie = new Cookie("Fingerprint", fingerprintHash);
+    cookie.setHttpOnly(true);
+    cookie.setSecure(false);  // true en produccion
+    cookie.setSameSite("Strict");
+    response.addCookie(cookie);
+
+    // 5. Almacenar refresh token en Redis
+    tokenService.storeRefreshToken(userId, tokenData.getRefreshToken());
+
+    // 6. Devolver JWT en body (para localStorage)
+    return ResponseEntity.ok(new TokenResponse(jwt, expiresIn));
 }
 ```
 
-#### POST `/api/auth/refresh` (Requiere Bearer token)
-Renueva el accessToken usando refresh token de Redis.
+#### POST `/api/auth/refresh`
+
+Renueva JWT y **rota el fingerprint** (seguridad adicional).
 
 ```java
 @PostMapping("/refresh")
-public ResponseEntity<?> refreshToken(@RequestHeader("Authorization") String authHeader) {
-    // 1. Extraer userId del token (validar firma, ignorar expiración)
-    String userId = extractUserIdFromToken(expiredToken);
+public ResponseEntity<?> refreshToken(HttpServletRequest request,
+                                       HttpServletResponse response) {
+    // 1. Extraer JWT actual (puede estar expirado)
+    String expiredToken = extractBearerToken(request);
+    Map<String, Object> claims = jwtService.extractAllClaims(expiredToken);
 
-    // 2. Buscar refresh token en Redis
-    Optional<String> refreshTokenOpt = tokenService.getRefreshToken(userId);
+    // 2. Obtener refresh token de Redis
+    String refreshToken = tokenService.getRefreshToken(userId);
 
-    // 3. Llamar a Keycloak para refrescar
-    Optional<TokenResponse> newTokenOpt = keycloakTokenService.refreshAccessToken(refreshToken);
+    // 3. Refrescar con Keycloak
+    TokenResponse kcResponse = keycloakTokenService.refreshAccessToken(refreshToken);
 
-    // 4. Devolver nuevo accessToken
-    return ResponseEntity.ok(newToken);
+    // 4. ROTAR fingerprint (nuevo para cada refresh)
+    String newFingerprint = fingerprintService.generateFingerprint();
+    String newHash = fingerprintService.hashFingerprint(newFingerprint);
+
+    // 5. Generar nuevo JWT con nuevo fingerprint
+    String newJwt = jwtService.generateToken(
+        claims.get("userId"),
+        claims.get("username"),
+        claims.get("email"),
+        claims.get("name"),
+        claims.get("roles"),
+        newFingerprint  // <-- Nuevo fingerprint
+    );
+
+    // 6. Actualizar cookie con nuevo hash
+    response.addCookie(createFingerprintCookie(newHash));
+
+    return ResponseEntity.ok(new TokenResponse(newJwt, expiresIn));
 }
 ```
 
-#### GET `/api/auth/status` (Requiere Bearer token)
-Verifica si el token es válido.
+#### POST `/api/auth/logout`
 
-```java
-@GetMapping("/status")
-public ResponseEntity<AuthStatusResponse> getAuthStatus() {
-    Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-
-    if (authentication != null && authentication.getPrincipal() instanceof Jwt) {
-        Jwt jwt = (Jwt) authentication.getPrincipal();
-        return ResponseEntity.ok(new AuthStatusResponse(true, jwt.getClaimAsString("preferred_username")));
-    }
-
-    return ResponseEntity.ok(new AuthStatusResponse(false, null, "No autenticado"));
-}
-```
-
-#### POST `/api/auth/logout` (Requiere Bearer token)
-Cierra sesión, revoca tokens.
+Cierra sesion y elimina cookie.
 
 ```java
 @PostMapping("/logout")
-public ResponseEntity<LogoutResponse> logout(@RequestHeader("Authorization") String authHeader) {
-    // 1. Extraer userId del token
-    String userId = extractUserIdFromToken(token);
-
-    // 2. Revocar en Keycloak
+public ResponseEntity<?> logout(HttpServletResponse response) {
+    // 1. Revocar en Keycloak
     keycloakTokenService.revokeToken(refreshToken);
 
-    // 3. Eliminar de Redis
+    // 2. Eliminar de Redis
     tokenService.deleteRefreshToken(userId);
 
-    return ResponseEntity.ok(new LogoutResponse(true, "Logout exitoso"));
+    // 3. Eliminar cookie (Max-Age = 0)
+    Cookie cookie = new Cookie("Fingerprint", "");
+    cookie.setMaxAge(0);
+    response.addCookie(cookie);
+
+    return ResponseEntity.ok(new LogoutResponse(true));
 }
 ```
 
 ---
 
-## Configuración
+### 5. SecurityConfig.java
+
+**Ubicacion**: `src/main/java/com/example/keycloak/config/SecurityConfig.java`
+
+**Configuracion clave**:
+
+```java
+@Bean
+public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    http
+        // CORS con credentials (para cookies)
+        .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+
+        // Filtro de binding ANTES del JWT
+        .addFilterBefore(fingerprintValidationFilter, UsernamePasswordAuthenticationFilter.class)
+
+        // Resource Server con decoder personalizado (JWT propio)
+        .oauth2ResourceServer(oauth2 -> oauth2
+            .jwt(jwt -> jwt
+                .decoder(customJwtDecoder())  // Valida JWT propio
+                .jwtAuthenticationConverter(jwtAuthenticationConverter())
+            )
+        )
+
+        // STATELESS
+        .sessionManagement(session -> session
+            .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+        )
+
+        .csrf(csrf -> csrf.disable());
+
+    return http.build();
+}
+
+// CORS debe permitir credentials para cookies
+@Bean
+public CorsConfigurationSource corsConfigurationSource() {
+    CorsConfiguration config = new CorsConfiguration();
+    config.setAllowedOrigins(List.of("http://localhost:4200"));
+    config.setAllowCredentials(true);  // <-- Importante para cookies
+    // ...
+}
+```
+
+---
+
+## Configuracion
 
 ### application.yml
 
@@ -371,102 +434,70 @@ spring:
             client-secret: ${KEYCLOAK_CLIENT_SECRET}
             authorization-grant-type: authorization_code
             scope: openid, profile, email
-            redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
         provider:
           keycloak:
             issuer-uri: http://localhost:9090/realms/mi-realm
-      resourceserver:
-        jwt:
-          issuer-uri: http://localhost:9090/realms/mi-realm
 
 app:
   frontend:
     url: http://localhost:4200
-  keycloak:
-    revoke-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/revoke
+
+  jwt:
+    secret: ${JWT_SECRET:mi-secret-super-seguro-para-jwt-binding}
+    expiration: 900  # 15 minutos
+
+  fingerprint:
+    cookie-name: Fingerprint
+    http-only: true
+    secure: false    # true en produccion (HTTPS)
+    same-site: Strict
+    path: /
+    max-age: 900     # Mismo TTL que el JWT
 ```
 
 ---
 
-## Flujo de Autenticación
+## Flujo de Autenticacion
 
-### Paso 1: Usuario inicia login
-
-```
-Angular                    Spring Boot                Keycloak
-  │                            │                         │
-  │ GET /api/auth/login        │                         │
-  ├───────────────────────────>│                         │
-  │                            │                         │
-  │ 302 → /oauth2/auth/kc      │                         │
-  │<───────────────────────────┤                         │
-  │                            │                         │
-  │                            │ 302 → KC login page     │
-  │<─────────────────────────────────────────────────────┤
-```
-
-### Paso 2: Usuario se autentica en Keycloak
+### Paso 1-4: OAuth2 con Keycloak (igual que antes)
 
 ```
-  │ POST credentials           │                         │
-  ├─────────────────────────────────────────────────────>│
-  │                            │                         │
-  │                            │ 302 → /login/oauth2/code│
-  │                            │ ?code=xxx               │
-  │<─────────────────────────────────────────────────────┤
+Angular -> Backend -> Keycloak -> Backend
 ```
 
-### Paso 3: Spring Boot intercambia código por tokens
+### Paso 5: Backend genera binding
 
 ```
-  │                            │ POST /token             │
-  │                            │ code + client_secret    │
-  │                            ├────────────────────────>│
-  │                            │                         │
-  │                            │ { access_token,         │
-  │                            │   refresh_token }       │
-  │                            │<────────────────────────┤
+Backend:
+  1. Extrae claims del token de Keycloak (userId, username, email, roles)
+  2. Genera fingerprint = UUID.randomUUID()
+  3. Calcula fingerprintHash = SHA-256(fingerprint)
+  4. Crea JWT propio con claim "fingerprint": fingerprint
+  5. Setea Cookie "Fingerprint": fingerprintHash (HttpOnly)
+  6. Devuelve JWT en body
 ```
 
-### Paso 4: Handler genera código temporal
+### Paso 6: Frontend almacena
 
 ```
-  │                            │                         │
-  │                     TokenService.createTempCode()    │
-  │                     → Redis: temp_code:{uuid}        │
-  │                            │                         │
-  │ 302 → /callback?code=uuid  │                         │
-  │<───────────────────────────┤                         │
+Frontend:
+  1. Recibe JWT en response body -> localStorage
+  2. Cookie se guarda automaticamente (navegador)
 ```
 
-### Paso 5: Frontend intercambia código por accessToken
+### Paso 7: Peticiones protegidas
 
 ```
-  │ POST /api/auth/exchange    │                         │
-  │ { code: uuid }             │                         │
-  ├───────────────────────────>│                         │
-  │                            │                         │
-  │                     Redis: GET + DELETE temp_code    │
-  │                     Redis: SET refresh_token:{uid}   │
-  │                            │                         │
-  │ { accessToken, expiresIn } │                         │
-  │<───────────────────────────┤                         │
-```
+Frontend:
+  1. Anade header: Authorization: Bearer {jwt}
+  2. withCredentials: true (cookie viaja automatica)
 
-### Paso 6: Peticiones con Bearer token
-
-```
-  │ GET /api/user/me           │                         │
-  │ Authorization: Bearer JWT  │                         │
-  ├───────────────────────────>│                         │
-  │                            │                         │
-  │              SecurityFilterChain                     │
-  │              • Valida JWT con Keycloak JWKS          │
-  │              • Extrae roles                          │
-  │              • Verifica @PreAuthorize                │
-  │                            │                         │
-  │ 200 { username, email... } │                         │
-  │<───────────────────────────┤                         │
+Backend (FingerprintValidationFilter):
+  1. Extrae fingerprint del JWT
+  2. Extrae hash de Cookie
+  3. Valida: SHA-256(fingerprint) == hash?
+  4. Si valido: continua a Spring Security
+  5. Si invalido: 401 Unauthorized
 ```
 
 ---
@@ -475,12 +506,12 @@ Angular                    Spring Boot                Keycloak
 
 ### Estructura de Claves
 
-| Prefijo | Contenido | TTL | Descripción |
+| Prefijo | Contenido | TTL | Descripcion |
 |---------|-----------|-----|-------------|
-| `temp_code:{uuid}` | TokenData (JSON) | 30s | Código temporal para exchange |
-| `refresh_token:{userId}` | JWT String | 8h | Refresh token del usuario |
+| `temp_code:{uuid}` | TokenData (JSON) | 30s | Codigo temporal para exchange |
+| `refresh_token:{userId}` | JWT String | 8h | Refresh token de Keycloak |
 
-### Comandos Útiles
+### Comandos Utiles
 
 ```bash
 # Conectar a Redis
@@ -492,172 +523,85 @@ KEYS *
 # Ver refresh tokens
 KEYS refresh_token:*
 
-# Ver contenido de una clave
+# Ver contenido
 GET "refresh_token:{userId}"
 
-# Ver TTL restante
+# Ver TTL
 TTL "refresh_token:{userId}"
-
-# Eliminar una clave
-DEL "refresh_token:{userId}"
-```
-
-### TokenData (JSON en Redis)
-
-```json
-{
-  "accessToken": "eyJhbGciOiJSUzI1NiIs...",
-  "refreshToken": "eyJhbGciOiJIUzI1NiIs...",
-  "userId": "e683f747-9c05-4d0d-b057-1f5b6a2d314e",
-  "expiresIn": 300
-}
 ```
 
 ---
 
 ## Testing
 
-### Test 1: Endpoint Público
+### Test 1: Verificar Binding
 
 ```bash
-curl http://localhost:8081/public/status
+# SIN cookie (debe fallar)
+curl -X GET http://localhost:8081/api/user/me \
+  -H "Authorization: Bearer {jwt}"
+# Resultado: 401 - "Binding requerido - cookie faltante"
+
+# CON cookie (debe funcionar)
+curl -X GET http://localhost:8081/api/user/me \
+  -H "Authorization: Bearer {jwt}" \
+  -H "Cookie: Fingerprint={hash}"
+# Resultado: 200 - User data
 ```
 
-**Resultado esperado**:
-```json
-{
-  "status": "UP",
-  "message": "El servidor está funcionando correctamente"
-}
-```
+### Test 2: Verificar en DevTools
 
-### Test 2: Exchange de Código
+1. Login en la aplicacion
+2. Abrir DevTools -> Application
+3. **Local Storage**: verificar `access_token`
+4. **Cookies**: verificar `Fingerprint` (HttpOnly = no visible en JS)
 
-```bash
-# Después del login, obtener código de la URL del callback
-curl -X POST http://localhost:8081/api/auth/exchange \
-  -H "Content-Type: application/json" \
-  -d '{"code": "uuid-del-callback"}'
-```
+### Test 3: Simular Ataque XSS
 
-**Resultado esperado**:
-```json
-{
-  "accessToken": "eyJhbGciOiJSUzI1NiIs...",
-  "expiresIn": 300
-}
-```
-
-### Test 3: Endpoint Protegido con Bearer
-
-```bash
-curl http://localhost:8081/api/user/me \
-  -H "Authorization: Bearer eyJhbGc..."
-```
-
-**Resultado esperado**:
-```json
-{
-  "username": "testuser",
-  "email": "test@example.com",
-  "name": "Test User",
-  "roles": ["ROLE_USER", "ROLE_ADMIN"]
-}
-```
-
-### Test 4: Refresh Token
-
-```bash
-curl -X POST http://localhost:8081/api/auth/refresh \
-  -H "Authorization: Bearer eyJhbGc..."
-```
-
-**Resultado esperado**:
-```json
-{
-  "accessToken": "eyJhbGciOiJSUzI1NiIs...",
-  "expiresIn": 300
-}
-```
-
-### Test 5: Logout
-
-```bash
-curl -X POST http://localhost:8081/api/auth/logout \
-  -H "Authorization: Bearer eyJhbGc..."
-```
-
-**Resultado esperado**:
-```json
-{
-  "success": true,
-  "message": "Logout exitoso"
-}
-```
+1. Copiar JWT de localStorage
+2. Intentar usar desde otra maquina (sin cookie)
+3. Resultado: 401 - Binding invalido
 
 ---
 
 ## Troubleshooting
 
-### Error: "Código temporal inválido o expirado"
+### Error: "Binding requerido - cookie faltante"
 
-**Causa**: El código temporal tiene TTL de 30 segundos.
+**Causa**: Cookie no viaja en la peticion.
 
-**Solución**:
-1. Verificar que Redis esté corriendo: `docker-compose ps`
-2. El exchange debe hacerse rápidamente después del redirect
-3. Revisar logs del backend para más detalles
+**Solucion**:
+1. Verificar `withCredentials: true` en interceptor Angular
+2. Verificar CORS `allowCredentials: true` en backend
+3. Verificar que origen es exacto (no wildcard)
 
-### Error: "No se encontró refresh token"
+### Error: "Binding invalido"
 
-**Causa**: El usuario fue deslogueado o sesión expiró.
+**Causa**: El hash no coincide.
 
-**Solución**:
-1. Nuevo login invalida el refresh token anterior
-2. Verificar en Redis: `KEYS refresh_token:*`
-3. Hacer login nuevamente
+**Posibles razones**:
+- Token robado intentando usar sin cookie
+- Fingerprint rotado pero usando JWT anterior
+- Manipulacion del JWT
 
-### Error: 401 en todas las peticiones
+**Solucion**: Hacer login nuevamente
 
-**Causa**: Token inválido o no se está enviando.
+### Error: Cookie no aparece en DevTools
 
-**Diagnóstico**:
-1. Verificar que el token esté en localStorage (DevTools → Application)
-2. Verificar Network tab: header `Authorization: Bearer` debe estar presente
-3. Verificar logs del backend para errores de validación JWT
+**Causa**: Cookie HttpOnly no es visible en JavaScript.
 
-### Error: Redis connection refused
-
-**Causa**: Redis no está corriendo.
-
-**Solución**:
-```bash
-docker-compose up -d redis
-docker-compose ps
-```
+**Solucion**: Es correcto! HttpOnly significa que JS no puede acceder. Verificar en Network tab que la cookie viaja en las peticiones.
 
 ---
 
-## Comparación: Headers vs Cookies
+## Comparacion: Binding vs Solo Headers
 
-| Aspecto | Headers + Redis (esta rama) | Cookies HttpOnly |
-|---------|----------------------------|------------------|
-| **XSS** | Expuesto (localStorage) | Protegido |
-| **CSRF** | No aplica | Posible (mitigado con SameSite) |
-| **Cross-domain** | Simple | Complejo |
-| **API Gateway** | Compatible | Problemático |
-| **Escalabilidad** | Redis (horizontal) | Sesiones server-side |
-| **Refresh Token** | Seguro en Redis | Seguro en cookie |
-| **Sesiones** | STATELESS | STATEFUL |
-
----
-
-## Referencias
-
-- [Spring Security OAuth2 Client](https://docs.spring.io/spring-security/reference/servlet/oauth2/client/index.html)
-- [Spring Security OAuth2 Resource Server](https://docs.spring.io/spring-security/reference/servlet/oauth2/resource-server/index.html)
-- [Spring Data Redis](https://docs.spring.io/spring-data/redis/docs/current/reference/html/)
-- [Keycloak Documentation](https://www.keycloak.org/documentation)
+| Aspecto | Solo Headers | Binding (JWT + Cookie) |
+|---------|--------------|------------------------|
+| XSS | Expuesto | Protegido |
+| CSRF | Protegido | Protegido |
+| Complejidad | Baja | Media |
+| Cross-domain | Facil | Requiere configuracion |
 
 ---
 

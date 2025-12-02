@@ -22,7 +22,7 @@ spring:
         registration:
           keycloak:
             client-id: spring-boot-client
-            client-secret: fzmAdt2kAN6QOYWzD7lFkM6CxTsl8W5h
+            client-secret: tu-secreto-de-cliente-de-prueba
             authorization-grant-type: authorization_code
             redirect-uri: "{baseUrl}/login/oauth2/code/{registrationId}"
             scope:
@@ -52,6 +52,27 @@ app:
   # Configuración de Keycloak para revocación de tokens
   keycloak:
     revoke-uri: http://localhost:9090/realms/mi-realm/protocol/openid-connect/revoke
+
+  # Configuración del JWT propio con fingerprint (binding)
+  jwt:
+    # Secret para firmar JWT (en producción usar variable de entorno)
+    secret: ${JWT_SECRET:mi-secret-super-seguro-para-jwt-binding-debe-tener-al-menos-256-bits}
+    # TTL del access token en segundos (15 minutos)
+    expiration: 900
+
+  # Configuración de la cookie de fingerprint
+  fingerprint:
+    cookie-name: Fingerprint
+    # HttpOnly: JavaScript no puede leerla (protección XSS)
+    http-only: true
+    # Secure: Solo viaja por HTTPS (false para desarrollo local)
+    secure: false
+    # SameSite: No se envía en requests cross-site
+    same-site: Strict
+    # Path: Válida para todo el dominio
+    path: /
+    # Max-Age: Mismo TTL que el access token (15 min = 900s)
+    max-age: 900
 
 # Configuración de logging
 logging:

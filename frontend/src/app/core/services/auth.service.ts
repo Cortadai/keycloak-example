@@ -24,18 +24,23 @@ const REFRESH_MARGIN_MS = 2 * 60 * 1000;
 const LOG_PREFIX = '🔐 [AuthService]';
 
 /**
- * Servicio de autenticación para el patrón BFF con Headers.
+ * Servicio de autenticación para el patrón BFF con Binding.
  *
- * Este servicio gestiona la autenticación usando Bearer tokens:
- * - Almacena accessToken en localStorage
+ * Este servicio gestiona la autenticación usando Bearer tokens + Cookie:
+ * - Almacena JWT con fingerprint en localStorage
+ * - Cookie HttpOnly con hash del fingerprint (manejada por navegador)
  * - El refreshToken NUNCA está en el frontend (está en Redis)
  * - Implementa refresh proactivo + reactivo (en 401)
+ *
+ * El binding protege contra:
+ * - XSS: Atacante roba JWT pero NO tiene cookie HttpOnly → BLOQUEADO
+ * - CSRF: Atacante tiene cookie pero NO puede leer JWT → BLOQUEADO
  *
  * Flujo:
  * 1. Login redirige a Keycloak vía backend
  * 2. Backend recibe callback y genera código temporal
- * 3. Frontend intercambia código por accessToken
- * 4. Todas las peticiones llevan header Authorization: Bearer
+ * 3. Frontend intercambia código por JWT (backend setea cookie automáticamente)
+ * 4. Todas las peticiones llevan header Authorization + cookie (withCredentials)
  */
 @Injectable({
   providedIn: 'root'
